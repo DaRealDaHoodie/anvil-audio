@@ -31,24 +31,36 @@ The Stable Audio model family remains the work of Stability AI.
 
 ## Requirements
 
-- Python 3.12 or later
+- Python **3.12 or 3.13** (strongly recommended — Python 3.14 is too new for several ML dependencies and will cause build failures)
 - PyTorch 2.0 or later (for Flash Attention support)
 
 ---
 
 ## Install
 
+> **Python 3.12 or 3.13 is strongly recommended.** Python 3.14 is too new — several
+> ML dependencies (scipy, k-diffusion) don't have pre-built wheels for it yet and will
+> attempt to compile from source. If you're on Homebrew Python, check your version with
+> `python3 --version` and install 3.12/3.13 via `brew install python@3.13` if needed.
+
 ```bash
 git clone https://github.com/DaRealDaHoodie/anvil-audio.git
 cd anvil-audio
 
 # create and activate a virtual environment (recommended, especially for Homebrew Python users)
-python3 -m venv .venv
+python3.13 -m venv .venv        # use python3.12 if 3.13 isn't available
 source .venv/bin/activate
 
 pip install .
 # avoid Accelerate import error on some setups
 pip uninstall -y transformer-engine
+```
+
+**If you must use Python 3.14** and hit scipy build errors, install a Fortran compiler first:
+
+```bash
+brew install gcc        # provides gfortran, required to compile scipy from source
+pip install .
 ```
 
 ---
