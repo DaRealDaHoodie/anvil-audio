@@ -198,8 +198,9 @@ def _load_conditions(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _save_audio(audio: torch.Tensor, path: str, sample_rate: int, fmt: str) -> None:
+    from anvil_audio.utils.audio_utils import save_audio
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(path, audio, sample_rate, format=fmt if fmt != "wav" else None)
+    save_audio(path, audio, sample_rate, fmt=fmt)
 
 
 # ---------------------------------------------------------------------------

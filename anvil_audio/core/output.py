@@ -308,15 +308,13 @@ class OutputManager:
         Returns:
             ``(audio_path, sidecar_path)`` — both absolute ``Path`` objects.
         """
-        import torchaudio
-        from anvil_audio.utils.audio_utils import float_to_int16_audio
+        from anvil_audio.utils.audio_utils import float_to_int16_audio, save_audio
 
         path = self.resolve_path(metadata, ext, subfolder)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         audio_int16 = float_to_int16_audio(audio)
-        fmt = ext if ext != "wav" else None
-        torchaudio.save(str(path), audio_int16, sample_rate, format=fmt)
+        save_audio(str(path), audio_int16, sample_rate, fmt=ext)
 
         metadata.output_path = str(path)
         sidecar = self.write_sidecar(path, metadata)

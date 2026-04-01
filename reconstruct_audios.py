@@ -145,8 +145,9 @@ def reconstruct_audio():
         rec = rec.squeeze(0).cpu()
 
         filename = filepath.split('/')[-1]
-        torchaudio.save(f"{output_dir}/{filename}", rec, sample_rate=sr, format='wav')
-        torchaudio.save(f"{output_dir}/../original/{filename}", audio.squeeze(0).cpu(), sample_rate=sr, format='wav')
+        from anvil_audio.utils.audio_utils import save_audio
+        save_audio(f"{output_dir}/{filename}", rec, sr)
+        save_audio(f"{output_dir}/../original/{filename}", audio.squeeze(0).cpu(), sr)
 
     print(f'[Finished : rank-{get_rank()}]')
 
