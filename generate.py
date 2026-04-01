@@ -1,198 +1,357 @@
 """
 Copyright (C) 2024 Yukara Ikemiya
 
-Generate audio samples using a pretrained generative model.
-This script supports multi-GPU processing via Accelerate, and also runs
-on Apple Silicon (MPS) or CPU for single-process use.
+Generate audio samples using a registered or locally-configured model.
+
+Usage — registry (preferred)
+-----------------------------
+    python generate.py --model stable-audio-open-1.0 --prompt "wooden door creak"
+    python generate.py --model sfx-v1 --cond-yaml-path batch.yaml --output-dir ./out
+    python generate.py --list-models
+
+Usage — legacy config path (unchanged behaviour)
+-------------------------------------------------
+    python generate.py --model-config path/to/config.json --ckpt-path path/to/ckpt.pt \
+        --prompt "wooden door creak" --output-dir ./out
+
+Multi-GPU is supported via Accelerate for both paths.
 """
 
+from __future__ import annotations
+
 import argparse
+import json
 import math
+import sys
 import yaml
 from pathlib import Path
+from typing import Any
 
 import torch
 import torchaudio
 from accelerate import Accelerator
 
-from stable_audio_tools import get_pretrained_model
-from stable_audio_tools.models.diffusion import ConditionedDiffusionModelWrapper
-from stable_audio_tools.inference.generation import generate_diffusion_cond
+from stable_audio_tools.core import load_pipeline, registry
+from stable_audio_tools.core.pipeline import DiffusionPipeline
 from stable_audio_tools.utils.torch_common import count_parameters, get_rank, get_world_size, get_best_device
 from stable_audio_tools.utils.audio_utils import float_to_int16_audio
 
-SUPPORTED_FORMATS = ["wav", "flac", "mp3"]
+SUPPORTED_FORMATS = ("wav", "flac", "mp3")
 
 
-def get_args():
-    args = argparse.ArgumentParser()
-    args.add_argument('--output-dir', type=str, required=True, help="Directory for saving generated audio samples.")
-    args.add_argument('--model-name', type=str, default="stabilityai/stable-audio-open-1.0", help="Pretrained model name.")
-    args.add_argument('--sampler-type', type=str, default="dpmpp-3m-sde", help="Diffusion sampler type.")
-    args.add_argument('--sample-steps', type=int, default=100, help="Number of diffusion steps.")
-    args.add_argument('--cfg-scale', type=float, default=7.0, help="Classifier-free guidance scale.")
-    args.add_argument('--n-sample-per-cond', type=int, default=1, help="Number of samples per condition.")
-    args.add_argument('--batch-size', type=int, default=10, help="Batch size per GPU.")
-    args.add_argument('--clip-length', action='store_true', help="Clip output to 'seconds_total'.")
-    args.add_argument('--seed', type=int, default=-1, help="Random seed (-1 for random).")
-    args.add_argument('--device', type=str, default='', help="Device to use (cuda, mps, cpu). Auto-detects if not set.")
-    args.add_argument('--format', type=str, default='wav', choices=SUPPORTED_FORMATS, help="Output audio format.")
-    # Inline prompt mode (alternative to --cond-yaml-path)
-    args.add_argument('--cond-yaml-path', type=str, default='', help="YAML file of sample conditions.")
-    args.add_argument('--prompt', type=str, default='', help="Single text prompt (no YAML needed).")
-    args.add_argument('--seconds-start', type=float, default=0.0, help="Start time in seconds (used with --prompt).")
-    args.add_argument('--seconds-total', type=float, default=30.0, help="Total duration in seconds (used with --prompt).")
-    args = args.parse_args()
-    return args
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Generate audio samples from a generative audio model.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    # ---- Model selection (mutually exclusive groups) ----
+    model_group = p.add_mutually_exclusive_group()
+    model_group.add_argument(
+        "--model",
+        type=str,
+        metavar="NAME",
+        help="Registry model name (e.g. 'stable-audio-open-1.0'). "
+             "Use --list-models to see available names.",
+    )
+    model_group.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Print all registered models and exit.",
+    )
+
+    # ---- Legacy config path ----
+    p.add_argument(
+        "--model-config",
+        type=str,
+        metavar="PATH",
+        help="Path to a JSON model config (legacy path; ignored if --model is set).",
+    )
+    p.add_argument(
+        "--ckpt-path",
+        type=str,
+        metavar="PATH",
+        help="Path to model checkpoint (legacy path; required with --model-config).",
+    )
+    p.add_argument(
+        "--pretransform-ckpt-path",
+        type=str,
+        metavar="PATH",
+        help="Optional separate checkpoint for the pretransform / VAE stage.",
+    )
+
+    # ---- Prompt / condition input ----
+    prompt_group = p.add_mutually_exclusive_group()
+    prompt_group.add_argument(
+        "--prompt",
+        type=str,
+        metavar="TEXT",
+        help="Single text prompt.  Use instead of --cond-yaml-path for quick runs.",
+    )
+    prompt_group.add_argument(
+        "--cond-yaml-path",
+        type=str,
+        metavar="PATH",
+        help="Path to a YAML file containing batch conditions.",
+    )
+
+    p.add_argument(
+        "--seconds-start",
+        type=float,
+        default=0.0,
+        help="Start time in seconds (used with --prompt). Default: 0.0",
+    )
+    p.add_argument(
+        "--seconds-total",
+        type=float,
+        default=30.0,
+        help="Total duration in seconds (used with --prompt). Default: 30.0",
+    )
+
+    # ---- Output ----
+    p.add_argument(
+        "--output-dir",
+        type=str,
+        default="./output",
+        help="Directory for saved audio files. Default: ./output",
+    )
+    p.add_argument(
+        "--format",
+        type=str,
+        default="wav",
+        choices=SUPPORTED_FORMATS,
+        help="Output audio format. Default: wav",
+    )
+    p.add_argument(
+        "--clip-length",
+        action="store_true",
+        help="Clip generated audio to 'seconds_total' from each condition.",
+    )
+
+    # ---- Sampling ----
+    p.add_argument("--sample-steps", type=int, default=None,
+                   help="Diffusion steps. Overrides registry/config default.")
+    p.add_argument("--cfg-scale", type=float, default=None,
+                   help="Classifier-free guidance scale. Overrides default.")
+    p.add_argument("--sampler-type", type=str, default=None,
+                   help="Sampler type. Overrides default.")
+    p.add_argument("--sigma-min", type=float, default=None,
+                   help="Sigma min. Overrides default.")
+    p.add_argument("--sigma-max", type=float, default=None,
+                   help="Sigma max. Overrides default.")
+    p.add_argument("--n-sample-per-cond", type=int, default=1,
+                   help="Number of samples per condition entry. Default: 1")
+    p.add_argument("--batch-size", type=int, default=10,
+                   help="Max items per inference batch per GPU. Default: 10")
+    p.add_argument("--seed", type=int, default=-1,
+                   help="RNG seed. -1 uses a random seed. Default: -1")
+
+    # ---- Device ----
+    p.add_argument(
+        "--device",
+        type=str,
+        default="",
+        help="Device (cuda, mps, cpu). Auto-detects best if not set.",
+    )
+
+    return p
 
 
-def flatten_dict(d, parent_key='', separator='/', depth=0):
-    items = {}
+# ---------------------------------------------------------------------------
+# Condition loading helpers
+# ---------------------------------------------------------------------------
+
+def _flatten_dict(d: dict, parent_key: str = "", sep: str = "/", depth: int = 0) -> dict:
+    items: dict = {}
     for k, v in d.items():
         if depth == 0:
-            assert isinstance(v, dict) and all([isinstance(v_, dict) for v_ in v.values()])
-        new_key = f"{parent_key}{separator}{k}" if parent_key else k
+            assert isinstance(v, dict) and all(isinstance(v_, dict) for v_ in v.values())
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
         if isinstance(list(v.values())[0], dict):
-            items.update(flatten_dict(v, new_key, separator=separator, depth=depth + 1))
+            items.update(_flatten_dict(v, new_key, sep=sep, depth=depth + 1))
         else:
-            assert all([not isinstance(v_, dict) for v_ in v.values()])
-            items[new_key] = {k_: v_ for k_, v_ in v.items()}
-
+            assert all(not isinstance(v_, dict) for v_ in v.values())
+            items[new_key] = dict(v)
     return items
 
 
-def parse_cond_yaml(yaml_path):
-    with open(yaml_path, 'r') as yml:
-        conds: dict = yaml.safe_load(yml)
+def _load_conditions(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """Return an ordered dict of {path_key: condition_dict}."""
+    if args.prompt:
+        return {
+            "prompt/item": {
+                "prompt": args.prompt,
+                "seconds_start": args.seconds_start,
+                "seconds_total": args.seconds_total,
+            }
+        }
+    with open(args.cond_yaml_path) as fh:
+        raw = yaml.safe_load(fh)
+    return _flatten_dict(raw)
 
-    conds: dict = flatten_dict(conds)
-    return conds
 
+# ---------------------------------------------------------------------------
+# Audio saving
+# ---------------------------------------------------------------------------
 
-def save_audio(audio: torch.Tensor, path: str, sample_rate: int, fmt: str):
-    """Save audio tensor to file, creating parent dirs as needed."""
+def _save_audio(audio: torch.Tensor, path: str, sample_rate: int, fmt: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    if fmt == "wav":
-        torchaudio.save(path, audio, sample_rate)
-    elif fmt == "flac":
-        torchaudio.save(path, audio, sample_rate, format="flac")
-    elif fmt == "mp3":
-        torchaudio.save(path, audio, sample_rate, format="mp3")
+    torchaudio.save(path, audio, sample_rate, format=fmt if fmt != "wav" else None)
 
 
-def main():
-    args = get_args()
+# ---------------------------------------------------------------------------
+# Pipeline loader (handles both registry and legacy paths)
+# ---------------------------------------------------------------------------
 
-    # Validate inputs
-    if not args.cond_yaml_path and not args.prompt:
-        raise ValueError("Must provide either --cond-yaml-path or --prompt")
-    if args.cond_yaml_path and args.prompt:
-        raise ValueError("Provide either --cond-yaml-path or --prompt, not both")
+def _load_pipeline(args: argparse.Namespace, device: torch.device) -> DiffusionPipeline:
+    if args.model:
+        # Registry path — default_params come from the registry entry; CLI flags
+        # override them later at generation time.
+        return load_pipeline(args.model, device=str(device))
 
-    # Config
-    output_dir: str = args.output_dir
-    model_name: str = args.model_name
-    sampler_type: str = args.sampler_type
-    sample_steps: int = args.sample_steps
-    cfg_scale: float = args.cfg_scale
-    n_sample_per_cond: int = args.n_sample_per_cond
-    batch_size: int = args.batch_size
-    clip_length: bool = args.clip_length
-    seed: int = args.seed
-    fmt: str = args.format
+    # Legacy path
+    if not args.model_config:
+        raise SystemExit(
+            "error: one of --model, --model-config, or --list-models is required."
+        )
+    if not args.ckpt_path:
+        raise SystemExit("error: --ckpt-path is required when using --model-config.")
 
-    batch_sample: int = max(batch_size // 2, 1) if cfg_scale != 1.0 else batch_size
+    from stable_audio_tools.models.factory import create_pipeline_from_config
+    with open(args.model_config) as fh:
+        model_config = json.load(fh)
 
-    # Device selection
+    pipeline = create_pipeline_from_config(
+        model_config,
+        ckpt_path=args.ckpt_path,
+        pretransform_ckpt_path=args.pretransform_ckpt_path,
+    )
+    pipeline.to(device)
+    return pipeline
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # --list-models: print and exit (no model loading needed)
+    if args.list_models:
+        entries = registry.list_models()
+        if not entries:
+            print("No models registered.")
+        else:
+            print(f"{'NAME':<35}  {'SOURCE'}")
+            print("-" * 70)
+            for e in entries:
+                source = e.pretrained_name or e.model_config_path or "(local)"
+                print(f"{e.name:<35}  {source}")
+        sys.exit(0)
+
+    # Validate prompt / condition input
+    if not args.prompt and not args.cond_yaml_path:
+        parser.error("one of --prompt or --cond-yaml-path is required for generation.")
+
+    # Device
+    device: torch.device
     if args.device:
         device = torch.device(args.device)
     else:
-        # Accelerate handles multi-GPU; fall back to best device for single-process
-        device = None  # resolved below after Accelerator init
+        accel = Accelerator()
+        device = accel.device if accel.device.type != "cpu" else get_best_device()
 
-    # Multi-GPU setup
-    accel = Accelerator()
     rank = get_rank()
     world_size = get_world_size()
 
-    if device is None:
-        device = accel.device if accel.device.type != "cpu" else get_best_device()
+    # Load pipeline
+    pipeline = _load_pipeline(args, device)
+    pipeline.eval()
 
-    # Load model
-    model, model_config = get_pretrained_model(model_name)
-    sample_rate = model_config["sample_rate"]
-    sample_size = model_config["sample_size"]
-    model: ConditionedDiffusionModelWrapper = model.to(device)
+    sample_rate = pipeline.sample_rate
+    sample_size = pipeline.sample_size
 
-    # Build condition list
-    if args.prompt:
-        conds = {"prompt/item": {"prompt": args.prompt, "seconds_start": args.seconds_start, "seconds_total": args.seconds_total}}
-    else:
-        conds = parse_cond_yaml(args.cond_yaml_path)
+    # Build per-call generation kwargs from CLI flags (only set if explicitly passed)
+    gen_kwargs: dict[str, Any] = {}
+    if args.cfg_scale is not None:
+        gen_kwargs["cfg_scale"] = args.cfg_scale
+    if args.sampler_type is not None:
+        gen_kwargs["sampler_type"] = args.sampler_type
+    if args.sigma_min is not None:
+        gen_kwargs["sigma_min"] = args.sigma_min
+    if args.sigma_max is not None:
+        gen_kwargs["sigma_max"] = args.sigma_max
 
-    path_full = []
-    conds_full = []
+    steps = args.sample_steps  # None means use pipeline default
+
+    # Effective batch window (CFG doubles the batch internally)
+    cfg = gen_kwargs.get("cfg_scale", pipeline.default_params.get("cfg_scale", 7.0))
+    batch_window = max(args.batch_size // 2, 1) if cfg != 1.0 else args.batch_size
+
+    # Load conditions and expand by n_sample_per_cond
+    conds = _load_conditions(args)
+    path_full: list[str] = []
+    conds_full: list[dict[str, Any]] = []
     for p, cond in conds.items():
-        for idx in range(n_sample_per_cond):
+        for idx in range(args.n_sample_per_cond):
             path_full.append(f"{p}_item-{idx + 1}")
             conds_full.append(cond)
 
-    # Print info on main process
-    if accel.is_main_process:
-        model.train()
+    # Print info (main process only)
+    if rank == 0:
+        model = pipeline.model
         params_model = count_parameters(model.model)
         params_cond = count_parameters(model.conditioner)
+        effective_params = {**pipeline.default_params, **gen_kwargs}
 
         print("=== Model Info ===")
         print(f"\tDevice:\t\t{device}")
         print(f"\tSample rate:\t{sample_rate}")
-        print(f"\tOut channels:\t{model.pretransform.io_channels}")
-        print(f"\tSample size:\t{sample_size} ({sample_size / sample_rate:.3f} [sec])")
-        print("=== Model parameters ===")
-        print(f'\tDiffusion :\t\t{params_model / (10**6):.3f} [million]')
-        print(f'\tConditioner :\t{params_cond / (10**6):.3f} [million]')
-        print("=== Sampling parameters ===")
-        print(f"\tSampler type:\t{sampler_type}")
-        print(f"\tSample steps:\t{sample_steps}")
-        print(f"\tCFG scale:\t\t{cfg_scale}")
-        print(f"\tSeed:\t\t{seed}")
-        print(f"\tOutput format:\t{fmt}")
-        print("=== Output ===")
-        print(f"\tTotal prompts:\t{len(conds.keys())}")
-        print(f"\tItems per prompt:\t{n_sample_per_cond}")
-        print('')
+        print(f"\tSample size:\t{sample_size} ({sample_size / sample_rate:.3f} sec)")
+        print("=== Parameters (M) ===")
+        print(f"\tDiffusion:\t{params_model / 1e6:.3f}")
+        print(f"\tConditioner:\t{params_cond / 1e6:.3f}")
+        print("=== Generation ===")
+        print(f"\tSteps:\t\t{steps or effective_params.get('steps', 100)}")
+        print(f"\tCFG scale:\t{effective_params.get('cfg_scale', 7.0)}")
+        print(f"\tSampler:\t{effective_params.get('sampler_type', 'dpmpp-3m-sde')}")
+        print(f"\tSeed:\t\t{args.seed}")
+        print(f"\tFormat:\t\t{args.format}")
+        print(f"\tTotal items:\t{len(path_full)} ({len(conds)} prompts × {args.n_sample_per_cond})")
+        print()
 
-    path_rank = path_full[rank:: world_size]
-    conds_rank = conds_full[rank:: world_size]
+    # Distribute across ranks
+    path_rank = path_full[rank::world_size]
+    conds_rank = conds_full[rank::world_size]
 
-    # Generation
-    model.eval()
-    n_iter = int(math.ceil(len(conds_rank) / batch_sample))
-    for idx in range(n_iter):
-        path_i = path_rank[idx * batch_sample: (idx + 1) * batch_sample]
-        conds_i = conds_rank[idx * batch_sample: (idx + 1) * batch_sample]
+    # Generation loop
+    n_iter = math.ceil(len(conds_rank) / batch_window)
+    for i in range(n_iter):
+        path_i = path_rank[i * batch_window: (i + 1) * batch_window]
+        conds_i = conds_rank[i * batch_window: (i + 1) * batch_window]
 
-        samples_i = generate_diffusion_cond(
-            model,
-            steps=sample_steps,
-            cfg_scale=cfg_scale,
+        samples = pipeline.generate(
             conditioning=conds_i,
-            sample_size=sample_size,
-            seed=seed,
-            sigma_min=0.3,
-            sigma_max=500,
-            sampler_type=sampler_type,
-            device=device,
-            disable_tqdm=(rank != 0)
+            steps=steps,
+            seed=args.seed,
+            disable_tqdm=(rank != 0),
+            **gen_kwargs,
         )
 
-        for idx_n in range(samples_i.shape[0]):
-            audio = float_to_int16_audio(samples_i[idx_n])
-            if clip_length:
-                L = int(conds_i[idx_n]['seconds_total'] * sample_rate)
+        for j in range(samples.shape[0]):
+            audio = float_to_int16_audio(samples[j])
+            if args.clip_length:
+                L = int(conds_i[j]["seconds_total"] * sample_rate)
                 audio = audio[:, :L]
-            save_path = f"{output_dir}/{path_i[idx_n]}.{fmt}"
-            save_audio(audio, save_path, sample_rate, fmt)
+            save_path = f"{args.output_dir}/{path_i[j]}.{args.format}"
+            _save_audio(audio, save_path, sample_rate, args.format)
 
     print(f"->->-> Rank-{rank}: Finished.")
 
