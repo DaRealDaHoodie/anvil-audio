@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import torch
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -313,7 +315,7 @@ class OutputManager:
         path = self.resolve_path(metadata, ext, subfolder)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        audio_int16 = float_to_int16_audio(audio)
+        audio_int16 = audio if audio.dtype == torch.int16 else float_to_int16_audio(audio)
         save_audio(str(path), audio_int16, sample_rate, fmt=ext)
 
         metadata.output_path = str(path)

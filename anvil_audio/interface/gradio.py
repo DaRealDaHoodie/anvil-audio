@@ -326,7 +326,7 @@ def generate_cond(
         seconds_total=float(seconds_total),
     )
     path, _ = output_manager.save_audio(
-        audio_item.cpu(), meta, sample_rate, ext="wav"
+        audio_int16.cpu(), meta, sample_rate, ext="wav"
     )
 
     spectrogram = audio_spectrogram_image(audio_int16.cpu(), sample_rate=sample_rate)
