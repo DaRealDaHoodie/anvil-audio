@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .interfaces import BasePipeline
     from .pipeline import DiffusionPipeline
 
 
@@ -62,18 +63,27 @@ _DEFAULT_PARAMS: dict[str, Any] = {
 class RegistryEntry:
     """A single named model configuration.
 
-    At least one of ``pretrained_name`` or (``model_config_path`` +
-    ``ckpt_path``) must be provided.
+    For Stable Audio / diffusion models at least one of ``pretrained_name``
+    or (``model_config_path`` + ``ckpt_path``) must be provided.
+
+    For ACE-Step models set ``pipeline_type = "acestep"`` and supply
+    ``acestep_project_root`` (the path to the ACE-Step repo / install
+    directory that contains ``checkpoints/``).
 
     Attributes:
         name:               Short identifier used as the ``--model`` CLI flag.
-        pretrained_name:    HuggingFace Hub repository ID.
-        model_config_path:  Path to a local JSON model config file.
-        ckpt_path:          Path to a local model checkpoint (.ckpt or .safetensors).
-        pretransform_ckpt_path: Optional path to a separate pretransform checkpoint.
+        pretrained_name:    HuggingFace Hub repository ID (diffusion models).
+        model_config_path:  Path to a local JSON model config file, or for
+                            ACE-Step the model variant name
+                            (e.g. ``"acestep-v15-turbo"``).
+        ckpt_path:          Path to a local model checkpoint (.ckpt / .safetensors).
+        pretransform_ckpt_path: Optional separate pretransform checkpoint path.
         default_params:     Generation parameters merged over global defaults.
                             Recognised keys: steps, cfg_scale, sampler_type,
                             sigma_min, sigma_max.
+        pipeline_type:      ``"diffusion"`` (default) or ``"acestep"``.
+        acestep_project_root: Path to the ACE-Step repository root (required
+                            when ``pipeline_type == "acestep"``).
     """
 
     name: str
@@ -82,13 +92,31 @@ class RegistryEntry:
     ckpt_path: str | None = None
     pretransform_ckpt_path: str | None = None
     default_params: dict[str, Any] = field(default_factory=dict)
+    pipeline_type: str = "diffusion"
+    acestep_project_root: str | None = None
 
     def resolved_params(self) -> dict[str, Any]:
         """Return generation params merged over the global defaults."""
+        if self.pipeline_type == "acestep":
+            _acestep_defaults: dict[str, Any] = {
+                "steps": 8,
+                "cfg_scale": 7.0,
+                "sampler_type": "ode",
+                "sigma_min": 0.0,
+                "sigma_max": 0.0,
+            }
+            return {**_acestep_defaults, **self.default_params}
         return {**_DEFAULT_PARAMS, **self.default_params}
 
     def validate(self) -> None:
         """Raise ``ValueError`` if the entry is not usable."""
+        if self.pipeline_type == "acestep":
+            if self.acestep_project_root is None:
+                raise ValueError(
+                    f"ACE-Step registry entry '{self.name}' must have "
+                    "'acestep_project_root' set to the ACE-Step repo path."
+                )
+            return
         has_hf = self.pretrained_name is not None
         has_local = self.model_config_path is not None and self.ckpt_path is not None
         if not has_hf and not has_local:
@@ -158,7 +186,9 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def _load_builtin(self) -> None:
-        """Register known Stability AI / HuggingFace models."""
+        """Register known Stability AI / HuggingFace models and ACE-Step."""
+        import os
+
         builtin: list[RegistryEntry] = [
             RegistryEntry(
                 name="stable-audio-open-1.0",
@@ -183,6 +213,49 @@ class ModelRegistry:
                 },
             ),
         ]
+
+        # ACE-Step v1.5 built-in entries.
+        # The project root is resolved in priority order:
+        #   1. ACESTEP_PROJECT_ROOT environment variable
+        #   2. The hard-coded local installation path known at authoring time
+        # Entries are only added when the project root directory actually exists
+        # so that the registry stays clean on machines without ACE-Step.
+        _acestep_root = os.environ.get(
+            "ACESTEP_PROJECT_ROOT",
+            os.path.expanduser("~/Developer/GitRepos/ACE-Step-1.5"),
+        )
+        if os.path.isdir(_acestep_root):
+            builtin += [
+                RegistryEntry(
+                    name="acestep-v1.5-turbo",
+                    pipeline_type="acestep",
+                    acestep_project_root=_acestep_root,
+                    model_config_path="acestep-v15-turbo",
+                    default_params={
+                        "steps": 50,
+                        "cfg_scale": 4.0,
+                        "audio_duration": 60,
+                        "sampler_type": "ode",
+                        "sigma_min": 0.0,
+                        "sigma_max": 0.0,
+                    },
+                ),
+                RegistryEntry(
+                    name="acestep-v1.5-sft",
+                    pipeline_type="acestep",
+                    acestep_project_root=_acestep_root,
+                    model_config_path="acestep-v15-sft",
+                    default_params={
+                        "steps": 100,
+                        "cfg_scale": 4.0,
+                        "audio_duration": 60,
+                        "sampler_type": "ode",
+                        "sigma_min": 0.0,
+                        "sigma_max": 0.0,
+                    },
+                ),
+            ]
+
         for entry in builtin:
             self._entries[entry.name] = entry
 
@@ -231,6 +304,8 @@ class ModelRegistry:
                     ckpt_path=item.get("ckpt_path"),
                     pretransform_ckpt_path=item.get("pretransform_ckpt_path"),
                     default_params=item.get("default_params") or {},
+                    pipeline_type=item.get("pipeline_type", "diffusion"),
+                    acestep_project_root=item.get("acestep_project_root"),
                 )
                 entry.validate()
                 self._entries[entry.name] = entry
@@ -252,28 +327,50 @@ registry = ModelRegistry()
 def load_pipeline(
     name: str,
     device: str | None = None,
-) -> "DiffusionPipeline":
-    """Load a ``DiffusionPipeline`` by registry name.
+) -> "BasePipeline":
+    """Load a pipeline by registry name.
 
-    This is the primary high-level entry point for programmatic use.
+    Dispatches to the correct pipeline class based on the registry entry's
+    ``pipeline_type`` field.  Diffusion models return a ``DiffusionPipeline``;
+    ACE-Step models return an ``ACEStepPipeline``.
 
     Args:
-        name:   Registry name (e.g. ``"stable-audio-open-1.0"``).
+        name:   Registry name (e.g. ``"stable-audio-open-1.0"`` or
+                ``"acestep-v1.5-turbo"``).
         device: Target device string (``"cuda"``, ``"mps"``, ``"cpu"``).
                 Auto-detects via ``get_best_device()`` if omitted.
 
     Returns:
-        A ``DiffusionPipeline`` with the model loaded and moved to *device*.
+        A ready-to-use ``BasePipeline`` instance.
 
     Raises:
         KeyError: If *name* is not in the registry.
     """
-    # Import here to avoid circular imports at module load time
-    from .pipeline import DiffusionPipeline
     from anvil_audio.utils.torch_common import get_best_device
 
     entry = registry.get(name)
     _device = device or str(get_best_device())
+
+    # ---------------------------------------------------------------
+    # ACE-Step pipeline
+    # ---------------------------------------------------------------
+    if entry.pipeline_type == "acestep":
+        from anvil_audio.pipelines.acestep import ACEStepPipeline
+
+        # For ACE-Step, map the generic device string to what AceStepHandler
+        # understands ("auto", "cuda", "mps", "cpu").
+        acestep_device = _device if _device in {"cuda", "mps", "cpu"} else "auto"
+        return ACEStepPipeline(
+            project_root=entry.acestep_project_root,  # type: ignore[arg-type]
+            config_path=entry.model_config_path or "acestep-v15-turbo",
+            device=acestep_device,
+            default_params=entry.resolved_params(),
+        )
+
+    # ---------------------------------------------------------------
+    # Diffusion pipeline (default)
+    # ---------------------------------------------------------------
+    from .pipeline import DiffusionPipeline
 
     if entry.pretrained_name is not None:
         from anvil_audio.models.pretrained import get_pretrained_model
@@ -283,7 +380,7 @@ def load_pipeline(
         from anvil_audio.models.factory import create_model_from_config
         from anvil_audio.models.utils import load_ckpt_state_dict
         from anvil_audio.utils.torch_common import copy_state_dict
-        with open(entry.model_config_path) as fh:
+        with open(entry.model_config_path) as fh:  # type: ignore[arg-type]
             model_config = json.load(fh)
         model = create_model_from_config(model_config)
         copy_state_dict(model, load_ckpt_state_dict(entry.ckpt_path))

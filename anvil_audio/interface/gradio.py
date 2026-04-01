@@ -46,6 +46,7 @@ from ..utils.torch_common import copy_state_dict, empty_cache, exists, get_best_
 _pipeline: DiffusionPipeline | None = None
 _model_name: str = ""
 _default_project: str = ""
+_pipeline_type: str = "diffusion"   # "diffusion" | "acestep"
 sample_rate: int = 32000
 sample_size: int = 1920000
 
@@ -135,9 +136,44 @@ def load_model(
     sample_rate = model_config["sample_rate"]
     sample_size = model_config["sample_size"]
     _default_project = project
+    _pipeline_type = "diffusion"
 
     print(f"->->-> Model loaded on {resolved_device}")
     return _pipeline, model_config
+
+
+def load_acestep_model(
+    entry: Any,
+    device: torch.device | str | None = None,
+    project: str = "",
+) -> None:
+    """Load an ACE-Step pipeline from a registry entry into module-level state.
+
+    Args:
+        entry:   A ``RegistryEntry`` with ``pipeline_type == "acestep"``.
+        device:  Target device.  ``None`` → auto-detect.
+        project: Default project name for output routing.
+    """
+    global _pipeline, _model_name, _default_project, sample_rate, sample_size, _pipeline_type
+
+    from anvil_audio.pipelines.acestep import ACEStepPipeline
+
+    resolved_device = torch.device(device) if device is not None else get_best_device()
+    acestep_device = str(resolved_device.type)
+    if acestep_device not in {"cuda", "mps", "cpu"}:
+        acestep_device = "auto"
+
+    _pipeline = ACEStepPipeline(  # type: ignore[assignment]
+        project_root=entry.acestep_project_root,
+        config_path=entry.model_config_path or "acestep-v15-turbo",
+        device=acestep_device,
+        default_params=entry.resolved_params(),
+    )
+    _model_name = entry.name
+    sample_rate = _pipeline.sample_rate
+    sample_size = _pipeline.sample_size
+    _default_project = project
+    _pipeline_type = "acestep"
 
 
 class _RawModelShim:
@@ -479,6 +515,83 @@ def generate_lm(
 
 
 # ---------------------------------------------------------------------------
+# ACE-Step generation
+# ---------------------------------------------------------------------------
+
+def generate_acestep(
+    prompt: str,
+    lyrics: str = "",
+    seconds_total: float = 30.0,
+    steps: int = 8,
+    cfg_scale: float = 7.0,
+    seed: int = -1,
+    project: str = "",
+) -> tuple[str, list[Any], dict[str, Any]]:
+    """Generate music with ACE-Step.
+
+    Args:
+        prompt:        Tags / style caption (e.g. ``"upbeat indie pop, energetic"``).
+        lyrics:        Lyric text.  Leave blank or pass ``"[Instrumental]"`` for
+                       instrumental output.
+        seconds_total: Duration of the generated audio in seconds.
+        steps:         Number of diffusion steps (8 = turbo, 60 = full quality).
+        cfg_scale:     Classifier-free guidance scale.
+        seed:          RNG seed; -1 means random.
+        project:       Project name for output routing.
+
+    Returns:
+        ``(wav_path, [spectrogram_image], metadata_dict)``
+    """
+    from datetime import datetime
+
+    pipeline = _get_pipeline()
+    empty_cache()
+    gc.collect()
+
+    print("=== ACE-Step generation ===")
+    print(f"\tPrompt (tags): {prompt}")
+    print(f"\tLyrics: {lyrics[:60]!r}{'...' if len(lyrics) > 60 else ''}")
+    print(f"\tDuration: {seconds_total}s  |  Steps: {steps}  |  CFG: {cfg_scale}  |  Seed: {seed}")
+
+    effective_seed = int(seed) if int(seed) != -1 else int(np.random.randint(0, 2**32 - 1))
+
+    conditioning = [{"prompt": prompt, "lyrics": lyrics, "seconds_total": seconds_total}]
+
+    audio = pipeline.generate(  # type: ignore[union-attr]
+        conditioning,
+        steps=steps,
+        seed=effective_seed,
+        cfg_scale=cfg_scale,
+    )  # [1, C, T]
+
+    audio_item = audio[0]  # [C, T]
+    audio_int16 = float_to_int16_audio(audio_item)
+    length = int(sample_rate * seconds_total)
+    audio_int16 = audio_int16[:, :length]
+
+    output_manager = OutputManager(project=project or _default_project or None)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    from ..core.output import GenerationMetadata as _GM
+    meta = _GM(
+        prompt=prompt,
+        model_name=_model_name,
+        seed=effective_seed,
+        steps=steps,
+        cfg_scale=float(cfg_scale),
+        sampler_type="ode",
+        sigma_min=0.0,
+        sigma_max=0.0,
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=ts,
+        extra={"lyrics": lyrics},
+    )
+    path, _ = output_manager.save_audio(audio_int16.cpu(), meta, sample_rate, ext="wav")
+
+    spectrogram = audio_spectrogram_image(audio_int16.cpu(), sample_rate=sample_rate)
+    return str(path), [spectrogram], meta.to_dict()
+
+
+# ---------------------------------------------------------------------------
 # Autoencoder / diffusion-prior passthrough (unchanged model logic)
 # ---------------------------------------------------------------------------
 
@@ -601,10 +714,15 @@ def _model_load_ui(
     """Called by the 'Load Model' button in the UI."""
     try:
         device = torch.device(device_str) if device_str else get_best_device()
-
-        # Resolve registry short-name → real HuggingFace pretrained_name.
-        # If the name isn't in the registry, treat it as a raw HF repo ID.
         entry = registry.get_model(model_name)
+
+        # ACE-Step models use a dedicated loading path.
+        if entry is not None and getattr(entry, "pipeline_type", "diffusion") == "acestep":
+            load_acestep_model(entry=entry, device=device, project=project)
+            return f"Loaded ACE-Step: {model_name} on {device}"
+
+        # Diffusion models: resolve registry short-name → HuggingFace pretrained_name.
+        # If the name isn't in the registry, treat it as a raw HF repo ID.
         resolved_pretrained = entry.pretrained_name if entry and entry.pretrained_name else model_name
 
         load_model(
@@ -627,6 +745,7 @@ def _model_load_ui_with_params(
     """Like _model_load_ui but also returns registry default_params to update UI sliders.
 
     Returns (status, steps, cfg_scale, sampler_type, sigma_min, sigma_max) × 2 tabs = 11 values.
+    ACE-Step models use their own defaults and 0.0 for the sigma fields.
     """
     import gradio as gr
 
@@ -643,6 +762,30 @@ def _model_load_ui_with_params(
     )
     # Return updates for both Generation and Inpainting tabs
     return (status,) + updates + updates
+
+
+def _model_load_ui_with_acestep_params(
+    model_name: str,
+    project: str,
+    model_half: bool,
+    device_str: str,
+) -> tuple:
+    """Like _model_load_ui but also returns registry default_params for ACE-Step sliders.
+
+    Returns (status, seconds_total_update, steps_update, cfg_scale_update).
+    """
+    import gradio as gr
+
+    status = _model_load_ui(model_name, project, model_half, device_str)
+    entry = registry.get_model(model_name)
+    p = entry.resolved_params() if entry else {}
+
+    return (
+        status,
+        gr.update(value=int(p.get("audio_duration", 60))),
+        gr.update(value=int(p.get("steps", 50))),
+        gr.update(value=float(p.get("cfg_scale", 4.0))),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +977,94 @@ def create_sampling_ui(
     return steps_slider, cfg_scale_slider, sampler_type_dropdown, sigma_min_slider, sigma_max_slider
 
 
+def create_acestep_ui(project_component: Any, default_params: dict | None = None) -> tuple:
+    """Build the Gradio UI panel for ACE-Step generation.
+
+    Shows a Prompt (tags) field and a Lyrics field alongside the standard
+    duration, steps, CFG, and seed controls.
+
+    Args:
+        project_component: The shared ``gr.Textbox`` for the project name.
+        default_params:    Registry default_params dict; slider values are
+                           initialised from ``steps``, ``cfg_scale``, and
+                           ``audio_duration`` when present.
+
+    Returns:
+        ``(seconds_total_slider, steps_slider, cfg_scale_slider)`` — component
+        references that the Load Model button handler updates with the newly
+        loaded model's registry default_params.
+    """
+    import gradio as gr
+
+    dp = default_params or {}
+    default_steps = int(dp.get("steps", 50))
+    default_cfg = float(dp.get("cfg_scale", 4.0))
+    default_duration = int(dp.get("audio_duration", 60))
+
+    with gr.Row():
+        with gr.Column(scale=6):
+            prompt = gr.Textbox(
+                show_label=False,
+                placeholder="Tags / style prompt (e.g. 'upbeat indie pop, electric guitar, energetic')",
+                info=(
+                    "Describe the style, genre, instruments, and mood.  "
+                    "ACE-Step responds best to comma-separated tag lists rather than "
+                    "full sentences."
+                ),
+            )
+            lyrics = gr.Textbox(
+                show_label=False,
+                placeholder="Lyrics  (optional — leave blank or type '[Instrumental]' for no vocals)",
+                lines=4,
+                info=(
+                    "Structure lyrics with section markers like [verse], [chorus], "
+                    "[bridge].  Leave blank for an instrumental track."
+                ),
+            )
+        generate_button = gr.Button("Generate", variant="primary", scale=1)
+
+    with gr.Row(equal_height=False):
+        with gr.Column():
+            with gr.Row():
+                seconds_total_slider = gr.Slider(
+                    minimum=5, maximum=240, step=5, value=default_duration,
+                    label="Duration (seconds)",
+                    info="Target audio length.  ACE-Step supports up to ~4 minutes.",
+                )
+                steps_slider = gr.Slider(
+                    minimum=1, maximum=150, step=1, value=default_steps,
+                    label="Steps",
+                    info="Diffusion steps.  50 = turbo (fast), 100 = full quality.",
+                )
+                cfg_scale_slider = gr.Slider(
+                    minimum=0.0, maximum=30.0, step=0.5, value=default_cfg,
+                    label="CFG scale",
+                    info="Guidance strength.  Higher = more literal prompt, lower = more creative.",
+                )
+                seed_input = gr.Number(
+                    label="Seed (-1 = random)", value=-1, precision=0,
+                    info="Lock to reproduce the exact same output.",
+                )
+
+        with gr.Column():
+            audio_output = gr.Audio(label="Output audio", interactive=False)
+            audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
+            metadata_output = gr.JSON(label="Generation metadata")
+
+    generate_button.click(
+        fn=generate_acestep,
+        inputs=[
+            prompt, lyrics,
+            seconds_total_slider, steps_slider, cfg_scale_slider,
+            seed_input, project_component,
+        ],
+        outputs=[audio_output, audio_spectrogram_output, metadata_output],
+        api_name="generate",
+    )
+
+    return seconds_total_slider, steps_slider, cfg_scale_slider
+
+
 def create_txt2audio_ui(model_config: dict[str, Any], project_component: Any) -> Any:
     import gradio as gr
     with gr.Blocks() as ui:
@@ -940,6 +1171,7 @@ def create_ui(
     tmp_dir: str = "",
     device: torch.device | None = None,
     project: str = "",
+    model_name: str | None = None,
 ) -> Any:
     """Build and return the Gradio ``Blocks`` interface.
 
@@ -952,33 +1184,57 @@ def create_ui(
         tmp_dir:                Legacy parameter (ignored; output manager handles paths).
         device:                 Target device.  Auto-detected if ``None``.
         project:                Default project name for output routing.
+        model_name:             Registry name of the model being loaded
+                                (used to detect ACE-Step pipeline types).
 
     Returns:
         A ``gradio.Blocks`` instance ready for ``.queue()`` and ``.launch()``.
     """
     import gradio as gr
 
-    assert exists(pretrained_name) ^ (exists(model_config_path) and exists(ckpt_path)), (
-        "Provide either pretrained_name or (model_config_path + ckpt_path), not both."
+    # Determine whether this is an ACE-Step model via the registry.
+    _entry = registry.get_model(model_name) if model_name else None
+    is_acestep = (
+        _entry is not None
+        and getattr(_entry, "pipeline_type", "diffusion") == "acestep"
     )
 
-    model_config_dict: dict[str, Any] | None = None
-    if exists(model_config_path):
-        with open(model_config_path) as fh:
-            model_config_dict = json.load(fh)
+    model_type: str
+    loaded_config: dict[str, Any]
 
-    _, loaded_config = load_model(
-        model_config=model_config_dict,
-        model_ckpt_path=ckpt_path,
-        pretrained_name=pretrained_name,
-        pretransform_ckpt_path=pretransform_ckpt_path,
-        device=device,
-        model_half=model_half,
-        project=project,
-    )
+    if is_acestep:
+        assert _entry is not None  # guaranteed by is_acestep condition
+        load_acestep_model(entry=_entry, device=device, project=project)
+        # Synthetic config so the rest of the function can branch on model_type.
+        model_type = "acestep"
+        loaded_config = {"model_type": "acestep"}
+        initial_status = f"Loaded ACE-Step: {model_name}"
+    else:
+        assert exists(pretrained_name) ^ (exists(model_config_path) and exists(ckpt_path)), (
+            "Provide either pretrained_name or (model_config_path + ckpt_path), not both."
+        )
 
-    model_type = loaded_config["model_type"]
+        model_config_dict: dict[str, Any] | None = None
+        if exists(model_config_path):
+            with open(model_config_path) as fh:  # type: ignore[arg-type]
+                model_config_dict = json.load(fh)
+
+        _, loaded_config = load_model(
+            model_config=model_config_dict,
+            model_ckpt_path=ckpt_path,
+            pretrained_name=pretrained_name,
+            pretransform_ckpt_path=pretransform_ckpt_path,
+            device=device,
+            model_half=model_half,
+            project=project,
+        )
+        model_type = loaded_config["model_type"]
+        initial_status = f"Loaded: {pretrained_name or 'custom'}"
+
     registered_models = [e.name for e in registry.list_models()]
+    initial_model_value = model_name if model_name in registered_models else (
+        pretrained_name if pretrained_name in registered_models else None
+    )
 
     with gr.Blocks(title="Stable Audio Tools") as interface:
 
@@ -994,7 +1250,7 @@ def create_ui(
             with gr.Column(scale=3):
                 model_dropdown = gr.Dropdown(
                     choices=registered_models,
-                    value=pretrained_name if pretrained_name in registered_models else None,
+                    value=initial_model_value,
                     label="Registered model",
                     info="Choose a registered model by name. Click Load to switch without restarting. Add your own in ~/.anvil-audio/registry.yaml.",
                 )
@@ -1009,7 +1265,7 @@ def create_ui(
 
         model_status = gr.Textbox(
             label="Model status",
-            value=f"Loaded: {pretrained_name or 'custom'}",
+            value=initial_status,
             interactive=False,
         )
 
@@ -1017,8 +1273,13 @@ def create_ui(
 
         # ---- Model-type-specific UI ----
         # Create UI first so we have component references for the Load Model click handler.
+        # param_comps is non-empty only for diffusion_cond — that's the only type whose
+        # Load Model button also updates sampler param sliders.  All other types (including
+        # ACE-Step) use a simple status-only return from the button handler.
         param_comps: tuple = ()
-        if model_type == "diffusion_cond":
+        if model_type == "acestep":
+            param_comps = create_acestep_ui(project_textbox, default_params=_entry.resolved_params() if _entry else None)
+        elif model_type == "diffusion_cond":
             param_comps = create_txt2audio_ui(loaded_config, project_textbox)
         elif model_type == "diffusion_uncond":
             create_diffusion_uncond_ui(loaded_config, project_textbox)
@@ -1030,16 +1291,23 @@ def create_ui(
             create_lm_ui(loaded_config, project_textbox)
 
         # Wire Load Model button — also pushes registry default_params to sliders when available.
-        if param_comps:
+        _btn_inputs = [model_dropdown, project_textbox, model_half_checkbox, device_textbox]
+        if param_comps and model_type == "acestep":
+            load_model_btn.click(
+                fn=_model_load_ui_with_acestep_params,
+                inputs=_btn_inputs,
+                outputs=[model_status, *param_comps],
+            )
+        elif param_comps:
             load_model_btn.click(
                 fn=_model_load_ui_with_params,
-                inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
+                inputs=_btn_inputs,
                 outputs=[model_status, *param_comps],
             )
         else:
             load_model_btn.click(
                 fn=_model_load_ui,
-                inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
+                inputs=_btn_inputs,
                 outputs=[model_status],
             )
 

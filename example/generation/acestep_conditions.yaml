@@ -1,0 +1,39 @@
+# ACE-Step batch generation example
+#
+# Usage:
+#   anvil generate --model acestep-v1.5-turbo --cond-yaml-path example/generation/acestep_conditions.yaml
+#
+# Each leaf entry supports these keys:
+#   prompt        (str)   Tags / style caption — comma-separated works best
+#   lyrics        (str)   Optional lyric text; use "[Instrumental]" for no vocals
+#   seconds_total (float) Duration in seconds (omit to let ACE-Step auto-choose)
+#
+# The nested YAML structure creates path-keyed filenames in the output directory.
+
+tracks:
+  indie_pop_with_lyrics:
+    prompt: "indie pop, acoustic guitar, warm vocals, upbeat, sunny afternoon"
+    lyrics: |
+      [verse]
+      Walking down the open road
+      Sunlight through the trees
+      Everything I ever wanted
+      Carried in the breeze
+      [chorus]
+      This is where I start again
+      This is where I'm free
+    seconds_total: 30.0
+
+  electronic_instrumental:
+    prompt: "electronic, synthwave, driving bass, retro 80s, cinematic"
+    lyrics: "[Instrumental]"
+    seconds_total: 45.0
+
+  ambient_atmospheric:
+    prompt: "ambient, atmospheric, slow evolving pads, cinematic, space"
+    seconds_total: 60.0
+
+  jazz_instrumental:
+    prompt: "jazz, upright bass, piano, brushed drums, late night, warm"
+    lyrics: "[Instrumental]"
+    seconds_total: 30.0

@@ -7,12 +7,16 @@ Anvil Audio is a refactored and extended fork of
 It turns a single-model inference codebase into a clean, swappable-component platform where
 models, conditioners, and compressors are first-class abstractions.
 
+Supports **Stable Audio** diffusion models and **ACE-Step** music-generation models through
+a unified registry, CLI, and Gradio UI.
+
 ---
 
 ## What's New in Anvil
 
 - **Pluggable pipeline architecture** — `BasePipeline`, `BaseGenerator`, `BaseCompressor`, `BaseConditioner` ABCs; swap any component without touching the rest of your workflow.
 - **Named model registry** — `anvil generate --model stable-audio-open-1.0 --prompt "..."` loads the right pipeline automatically; add your own entries in `~/.anvil-audio/registry.yaml`.
+- **ACE-Step support** — optional integration with [ACE-Step v1.5](https://github.com/ace-step/ACE-Step) for full-song music generation with lyrics and style tags.
 - **Output management** — collision-free timestamped filenames, JSON metadata sidecars, batch manifests, and project-scoped folders under `~/anvil-audio-outputs/`.
 - **MPS / CUDA / CPU auto-detection** — runs on Apple Silicon, NVIDIA GPUs, or CPU with no flags needed.
 - **`anvil generate` CLI** — multi-GPU via Accelerate, wav/flac/mp3 output, batch YAML conditions, per-run seed control.
@@ -21,35 +25,27 @@ models, conditioners, and compressors are first-class abstractions.
 
 ---
 
-## Credits
-
-Built on top of [`stable-audio-tools`](https://github.com/Stability-AI/stable-audio-tools) (MIT) by Stability AI
-and the [`friendly-stable-audio-tools`](https://github.com/yukara-ikemiya/friendly-stable-audio-tools) refactor by Yukara Ikemiya.
-The Stable Audio model family remains the work of Stability AI.
-
----
-
 ## Requirements
 
 - Python **3.12 or 3.13** (strongly recommended — Python 3.14 is too new for several ML dependencies and will cause build failures)
-- PyTorch 2.0 or later (for Flash Attention support)
+- PyTorch 2.0 or later
 
 ---
 
 ## Install
 
-> **Python 3.12 or 3.13 is strongly recommended.** Python 3.14 is too new — several
-> ML dependencies (scipy, k-diffusion) don't have pre-built wheels for it yet and will
-> attempt to compile from source. If you're on Homebrew Python, check your version with
+> **Python 3.12 or 3.13 is strongly recommended.** Python 3.14 is too new — several ML
+> dependencies (scipy, k-diffusion) don't have pre-built wheels for it yet and will attempt
+> to compile from source. If you're on Homebrew Python, check your version with
 > `python3 --version` and install 3.12/3.13 via `brew install python@3.13` if needed.
 
 ```bash
 git clone https://github.com/DaRealDaHoodie/anvil-audio.git
 cd anvil-audio
 
-# create and activate a virtual environment (recommended, especially for Homebrew Python users)
+# Python 3.12+ requires a virtual environment (mandatory on Homebrew / system Python)
 python3.13 -m venv .venv        # use python3.12 if 3.13 isn't available
-source .venv/bin/activate
+source .venv/bin/activate       # Windows: .venv\Scripts\activate
 
 pip install .
 # avoid Accelerate import error on some setups
@@ -67,7 +63,26 @@ pip install .
 
 ## Quick Start
 
-### Generate from the CLI
+The fastest path to generating audio:
+
+```bash
+# 1. Clone and install (see Install above)
+# 2. Add a model to your registry (see User Registry below)
+# 3. Launch the Gradio UI — loads your first registered model automatically
+python run_gradio.py
+```
+
+Or from the CLI in one command:
+
+```bash
+anvil generate --model stable-audio-open-1.0 --prompt "wooden door creak"
+```
+
+---
+
+## Stable Audio Models
+
+### CLI
 
 ```bash
 # Use a registered model by name
@@ -89,34 +104,115 @@ Multi-GPU generation is supported via Accelerate.
 ### Gradio web UI
 
 ```bash
-# Pretrained model from Hugging Face Hub
+# Load by registry name (recommended)
+python run_gradio.py --model stable-audio-open-1.0
+
+# Load from HuggingFace Hub directly
 python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0
 
-# Apple Silicon
-python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --device mps
+# No args — loads the first model from your registry
+python run_gradio.py
 
 # Route outputs to a named project folder
-python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --project sfx-pack-v1
+python run_gradio.py --model stable-audio-open-1.0 --project sfx-pack-v1
 ```
 
-`run_gradio.py` flags:
+---
 
-| Flag | Description |
-|------|-------------|
-| `--pretrained-name` | HuggingFace Hub repo ID (e.g. `stabilityai/stable-audio-open-1.0`) |
-| `--model-config` | Local model config JSON (ignored if `--pretrained-name` set) |
-| `--ckpt-path` | Local checkpoint (ignored if `--pretrained-name` set) |
-| `--pretransform-ckpt-path` | Optional separate VAE checkpoint |
-| `--username` / `--password` | Gradio auth |
-| `--model-half` | Use float16 inference |
-| `--device` | `cuda`, `mps`, or `cpu` (auto-detects if omitted) |
-| `--project` | Outputs go to `~/anvil-audio-outputs/{project}/` |
+## ACE-Step Music Generation (optional)
+
+[ACE-Step](https://github.com/ace-step/ACE-Step) is an open-source full-song music generation
+model that supports style tags and full lyric input. Anvil integrates it through the same
+registry and UI as Stable Audio — no separate server or app required.
+
+ACE-Step is **optional**. If you don't install it, all other Anvil functionality works as normal.
+
+### Install ACE-Step
+
+```bash
+# Clone the ACE-Step repo (Anvil imports it directly — no pip install needed)
+git clone https://github.com/ace-step/ACE-Step.git ~/Developer/GitRepos/ACE-Step-1.5
+cd ~/Developer/GitRepos/ACE-Step-1.5
+
+# Install ACE-Step's dependencies into your Anvil venv
+pip install -r requirements.txt
+
+# ACE-Step requires transformers 4.x (not 5.x)
+pip install "transformers>=4.51.0,<4.58.0"
+```
+
+The model weights are downloaded automatically from HuggingFace the first time you generate.
+
+To use a custom install path, set `ACESTEP_PROJECT_ROOT` before launching:
+
+```bash
+export ACESTEP_PROJECT_ROOT=/path/to/your/ACE-Step
+```
+
+### Built-in registry entries
+
+Anvil registers two ACE-Step variants automatically when the repo is found:
+
+| Model name | Description | Steps | Notes |
+|---|---|---|---|
+| `acestep-v1.5-turbo` | Fast generation | 50 | Good for drafts and quick iteration |
+| `acestep-v1.5-sft` | Full quality | 100 | Better for final exports |
+
+### CLI
+
+```bash
+# Single prompt (instrumental)
+anvil generate --model acestep-v1.5-turbo \
+    --prompt "indie pop, acoustic guitar, warm vocals, upbeat"
+
+# Batch generation with lyrics (see example file)
+anvil generate --model acestep-v1.5-turbo \
+    --cond-yaml-path example/generation/acestep_conditions.yaml \
+    --output-dir ./out
+```
+
+Batch YAML format — each entry supports `prompt`, `lyrics`, and `seconds_total`:
+
+```yaml
+tracks:
+  indie_pop:
+    prompt: "indie pop, acoustic guitar, warm vocals, upbeat, sunny afternoon"
+    lyrics: |
+      [verse]
+      Walking down the open road
+      Sunlight through the trees
+      [chorus]
+      This is where I start again
+    seconds_total: 30.0
+
+  electronic_instrumental:
+    prompt: "electronic, synthwave, driving bass, retro 80s, cinematic"
+    lyrics: "[Instrumental]"
+    seconds_total: 45.0
+```
+
+### Gradio web UI
+
+```bash
+# Turbo (fast, good for iteration)
+python run_gradio.py --model acestep-v1.5-turbo
+
+# Full quality
+python run_gradio.py --model acestep-v1.5-sft
+```
+
+The ACE-Step UI adds a **Lyrics** field below the prompt. Leave it blank or enter
+`[Instrumental]` for tracks with no vocals. Structure lyrics with section markers
+like `[verse]`, `[chorus]`, `[bridge]`.
 
 ---
 
 ## User Registry
 
-Add your own models to `~/.anvil-audio/registry.yaml`:
+Add your own models to `~/.anvil-audio/registry.yaml`. The file is a YAML list — entries
+with the same name as a built-in will override it.
+
+### Stable Audio / diffusion models
 
 ```yaml
 - name: my-sfx-model
@@ -130,6 +226,63 @@ Add your own models to `~/.anvil-audio/registry.yaml`:
   ckpt_path: /path/to/model.ckpt
   pretransform_ckpt_path: /path/to/vae.ckpt
 ```
+
+### ACE-Step models
+
+```yaml
+- name: my-acestep-finetune
+  pipeline_type: acestep
+  acestep_project_root: /path/to/ACE-Step    # path to the cloned repo
+  model_config_path: acestep-v15-turbo        # checkpoint variant name
+  default_params:
+    steps: 50
+    cfg_scale: 4.0
+    audio_duration: 60
+```
+
+---
+
+## `run_gradio.py` flags
+
+| Flag | Description |
+|------|-------------|
+| `--model` | Registry model name (e.g. `stable-audio-open-1.0`, `acestep-v1.5-turbo`) |
+| `--pretrained-name` | HuggingFace Hub repo ID (e.g. `stabilityai/stable-audio-open-1.0`) |
+| `--model-config` | Local model config JSON (ignored if `--model` or `--pretrained-name` set) |
+| `--ckpt-path` | Local checkpoint (ignored if `--model` or `--pretrained-name` set) |
+| `--pretransform-ckpt-path` | Optional separate VAE checkpoint |
+| `--username` / `--password` | Gradio auth |
+| `--model-half` | Use float16 inference |
+| `--device` | `cuda`, `mps`, or `cpu` (auto-detects if omitted) |
+| `--project` | Outputs go to `~/anvil-audio-outputs/{project}/` |
+| `--share` | Create a public Gradio share URL |
+
+---
+
+## `anvil generate` flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model NAME` | — | Registry model name |
+| `--list-models` | — | Print registry and exit |
+| `--model-config PATH` | — | Legacy: local JSON config |
+| `--ckpt-path PATH` | — | Legacy: local checkpoint |
+| `--pretransform-ckpt-path PATH` | — | Separate VAE checkpoint |
+| `--prompt TEXT` | — | Single text prompt |
+| `--cond-yaml-path PATH` | — | Batch YAML conditions file |
+| `--seconds-start` | `0.0` | Start time (seconds) |
+| `--seconds-total` | `30.0` | Duration (seconds) |
+| `--output-dir` | `./output` | Output directory |
+| `--format` | `wav` | `wav`, `flac`, or `mp3` |
+| `--clip-length` | off | Clip to `seconds_total` |
+| `--sample-steps` | pipeline default | Diffusion / inference steps |
+| `--cfg-scale` | pipeline default | CFG guidance scale |
+| `--sampler-type` | pipeline default | Sampler type |
+| `--sigma-min` / `--sigma-max` | pipeline default | Noise schedule bounds |
+| `--n-sample-per-cond` | `1` | Samples per condition |
+| `--batch-size` | `10` | Items per GPU batch |
+| `--seed` | `-1` (random) | RNG seed |
+| `--device` | auto | `cuda`, `mps`, or `cpu` |
 
 ---
 
@@ -276,36 +429,25 @@ singularity build anvil-audio.sif docker-daemon://anvil-audio
 
 ---
 
-## `anvil generate` flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--model NAME` | — | Registry model name |
-| `--list-models` | — | Print registry and exit |
-| `--model-config PATH` | — | Legacy: local JSON config |
-| `--ckpt-path PATH` | — | Legacy: local checkpoint |
-| `--pretransform-ckpt-path PATH` | — | Separate VAE checkpoint |
-| `--prompt TEXT` | — | Single text prompt |
-| `--cond-yaml-path PATH` | — | Batch YAML conditions file |
-| `--seconds-start` | `0.0` | Start time (seconds) |
-| `--seconds-total` | `30.0` | Duration (seconds) |
-| `--output-dir` | `./output` | Output directory |
-| `--format` | `wav` | `wav`, `flac`, or `mp3` |
-| `--clip-length` | off | Clip to `seconds_total` |
-| `--sample-steps` | pipeline default | Diffusion steps |
-| `--cfg-scale` | pipeline default | CFG guidance scale |
-| `--sampler-type` | pipeline default | Sampler type |
-| `--sigma-min` / `--sigma-max` | pipeline default | Noise schedule bounds |
-| `--n-sample-per-cond` | `1` | Samples per condition |
-| `--batch-size` | `10` | Items per GPU batch |
-| `--seed` | `-1` (random) | RNG seed |
-| `--device` | auto | `cuda`, `mps`, or `cpu` |
-
----
-
 ## Todo
 
+- [x] Pluggable pipeline architecture (BasePipeline, BaseGenerator, etc.)
+- [x] Named model registry with user-extensible YAML
+- [x] Output manager (collision-free filenames, JSON sidecars, project folders)
+- [x] `anvil generate` CLI with multi-GPU, batch YAML, seed control
+- [x] Gradio UI with model hot-reload and live metadata
+- [x] ACE-Step v1.5 integration (turbo + SFT, lyrics support, Gradio UI)
+- [ ] Post-processing pipeline (EQ, normalize, fade)
+- [ ] PyPI package (`pip install anvil-audio`)
+- [ ] MCP server integration
 - [ ] Add more audio augmentations
 - [ ] Add troubleshooting section
 - [ ] Add contribution guidelines
-- [ ] MCP server integration
+
+---
+
+## Licensing
+
+Anvil Audio is MIT licensed. It builds on several open-source projects and optional model
+weights with their own licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
+full attributions.

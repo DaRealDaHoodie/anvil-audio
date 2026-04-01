@@ -37,13 +37,17 @@ from anvil_audio.interface.gradio import create_ui
 from anvil_audio.utils.torch_common import get_best_device
 
 
-def resolve_model(args: argparse.Namespace) -> str | None:
-    """Return the pretrained_name to load, or None if using local config/ckpt.
+def resolve_model(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Return ``(pretrained_name, registry_model_name)`` for the requested model.
+
+    ``pretrained_name`` is the HuggingFace repo ID (or ``None`` for local /
+    ACE-Step models).  ``registry_model_name`` is the registry short-name (or
+    ``None`` when loading via raw pretrained_name or local config).
 
     Resolution order:
-    1. --model (registry name lookup)
-    2. --pretrained-name (raw HF repo ID, passed through as-is)
-    3. --model-config + --ckpt-path (local files, returns None)
+    1. ``--model`` (registry name lookup)
+    2. ``--pretrained-name`` (raw HF repo ID, passed through as-is)
+    3. ``--model-config + --ckpt-path`` (local files)
     4. No args → first registry entry, or error if registry is empty
     """
     if args.model:
@@ -57,18 +61,21 @@ def resolve_model(args: argparse.Namespace) -> str | None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        # ACE-Step models: handled entirely through the registry name.
+        if getattr(entry, "pipeline_type", "diffusion") == "acestep":
+            return None, entry.name
         if entry.pretrained_name:
-            return entry.pretrained_name
+            return entry.pretrained_name, entry.name
         # local-config entry — handled via model_config_path/ckpt_path
         args.model_config = args.model_config or entry.model_config_path
         args.ckpt_path = args.ckpt_path or entry.ckpt_path
-        return None
+        return None, entry.name
 
     if args.pretrained_name:
-        return args.pretrained_name
+        return args.pretrained_name, None
 
     if args.model_config and args.ckpt_path:
-        return None
+        return None, None
 
     # No model specified — fall back to first registry entry
     models = registry.list_models()
@@ -86,11 +93,13 @@ def resolve_model(args: argparse.Namespace) -> str | None:
 
     default = models[0]
     print(f"->->-> No model specified — using registry default: {default.name}")
+    if getattr(default, "pipeline_type", "diffusion") == "acestep":
+        return None, default.name
     if default.pretrained_name:
-        return default.pretrained_name
+        return default.pretrained_name, default.name
     args.model_config = args.model_config or default.model_config_path
     args.ckpt_path = args.ckpt_path or default.ckpt_path
-    return None
+    return None, default.name
 
 
 def main(args: argparse.Namespace) -> None:
@@ -99,7 +108,7 @@ def main(args: argparse.Namespace) -> None:
     device = torch.device(args.device) if args.device else get_best_device()
     print(f"->->-> Using device: {device}")
 
-    pretrained_name = resolve_model(args)
+    pretrained_name, registry_model_name = resolve_model(args)
 
     interface = create_ui(
         model_config_path=args.model_config,
@@ -110,6 +119,7 @@ def main(args: argparse.Namespace) -> None:
         tmp_dir=args.tmp_dir,
         device=device,
         project=args.project,
+        model_name=registry_model_name,
     )
     interface.queue()
     from pathlib import Path

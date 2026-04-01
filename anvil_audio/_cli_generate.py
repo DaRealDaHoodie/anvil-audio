@@ -322,18 +322,20 @@ def main() -> None:
 
     # Print info (main process only)
     if rank == 0:
-        model = pipeline.model
-        params_model = count_parameters(model.model)
-        params_cond = count_parameters(model.conditioner)
         effective_params = {**pipeline.default_params, **gen_kwargs}
 
         print("=== Model Info ===")
         print(f"\tDevice:\t\t{device}")
         print(f"\tSample rate:\t{sample_rate}")
         print(f"\tSample size:\t{sample_size} ({sample_size / sample_rate:.3f} sec)")
-        print("=== Parameters (M) ===")
-        print(f"\tDiffusion:\t{params_model / 1e6:.3f}")
-        print(f"\tConditioner:\t{params_cond / 1e6:.3f}")
+        # Parameter counts are only meaningful for DiffusionPipeline models.
+        if isinstance(pipeline, DiffusionPipeline):
+            model_inner = pipeline.model
+            params_model = count_parameters(model_inner.model)
+            params_cond = count_parameters(model_inner.conditioner)
+            print("=== Parameters (M) ===")
+            print(f"\tDiffusion:\t{params_model / 1e6:.3f}")
+            print(f"\tConditioner:\t{params_cond / 1e6:.3f}")
         print("=== Generation ===")
         print(f"\tSteps:\t\t{steps or effective_params.get('steps', 100)}")
         print(f"\tCFG scale:\t{effective_params.get('cfg_scale', 7.0)}")
