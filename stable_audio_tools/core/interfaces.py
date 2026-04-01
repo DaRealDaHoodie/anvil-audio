@@ -243,6 +243,118 @@ class BasePipeline(ABC):
         """Move all internal modules to *device* and return ``self``."""
 
     # ------------------------------------------------------------------
+    # Concrete output method — inherited by all subclasses automatically
+    # ------------------------------------------------------------------
+
+    def generate_and_save(
+        self,
+        conditioning: list[dict[str, Any]],
+        output_manager: "Any",
+        steps: int | None = None,
+        seed: int = -1,
+        model_name: str = "unknown",
+        audio_format: str = "wav",
+        **kwargs: Any,
+    ) -> list["Any"]:
+        """Generate audio and save every item to disk via *output_manager*.
+
+        This is a concrete method; all ``BasePipeline`` subclasses inherit it
+        for free.  It is the preferred entry point for programmatic use and
+        is callable without Gradio or the CLI::
+
+            from stable_audio_tools.core import load_pipeline
+            from stable_audio_tools.core.output import OutputManager
+
+            pipe = load_pipeline("stable-audio-open-1.0")
+            manager = OutputManager(project="my-project")
+            results = pipe.generate_and_save(
+                [{"prompt": "rain", "seconds_start": 0, "seconds_total": 10}],
+                output_manager=manager,
+                seed=42,
+            )
+            print(results[0].path)       # Path to saved WAV
+            print(results[0].metadata)   # Full GenerationMetadata
+
+        Args:
+            conditioning:  List of B condition dicts passed to ``generate()``.
+            output_manager: An ``OutputManager`` instance that handles routing
+                            and naming.  Typed as ``Any`` to avoid a hard
+                            import at module level.
+            steps:         Diffusion steps; falls back to pipeline default if
+                           ``None``.
+            seed:          RNG seed.  If ``-1``, a random seed is drawn *here*
+                           so the exact value is captured in metadata.
+            model_name:    Registry name stored in each ``GenerationMetadata``
+                           for reproducibility.
+            audio_format:  File extension (``"wav"``, ``"flac"``, ``"mp3"``).
+            **kwargs:      Forwarded to ``generate()`` (cfg_scale, sampler_type,
+                           sigma_min, sigma_max, …).
+
+        Returns:
+            List of ``GenerationResult`` objects, one per conditioning item.
+            For batches > 1, a ``batch_manifest.json`` is also written.
+        """
+        import numpy as np
+        from datetime import datetime
+        from .output import GenerationMetadata, GenerationResult
+
+        # Resolve seed before generation so metadata always has a real value.
+        effective_seed = (
+            seed if seed != -1
+            else int(np.random.randint(0, 2**32 - 1, dtype=np.uint32))
+        )
+
+        # Determine effective steps for metadata (pipeline default if not given).
+        default_params: dict[str, Any] = getattr(self, "default_params", {})
+        effective_steps = steps if steps is not None else default_params.get("steps", 100)
+
+        # Generate all items as a batch tensor: [B, C, T]
+        audio_batch = self.generate(
+            conditioning,
+            steps=steps,
+            seed=effective_seed,
+            **kwargs,
+        )
+
+        batch_size = audio_batch.shape[0]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        subfolder = (
+            output_manager.make_batch_dir(batch_size) if batch_size > 1 else None
+        )
+
+        results: list[GenerationResult] = []
+        for i, cond in enumerate(conditioning):
+            audio_i = audio_batch[i]  # [C, T]
+
+            meta = GenerationMetadata(
+                prompt=cond.get("prompt", ""),
+                model_name=model_name,
+                seed=effective_seed,
+                steps=effective_steps,
+                cfg_scale=float(kwargs.get("cfg_scale", default_params.get("cfg_scale", 7.0))),
+                sampler_type=str(kwargs.get("sampler_type", default_params.get("sampler_type", "dpmpp-3m-sde"))),
+                sigma_min=float(kwargs.get("sigma_min", default_params.get("sigma_min", 0.3))),
+                sigma_max=float(kwargs.get("sigma_max", default_params.get("sigma_max", 500.0))),
+                duration_seconds=audio_i.shape[-1] / self.sample_rate,
+                timestamp=ts,
+                negative_prompt=cond.get("negative_prompt", ""),
+                seconds_start=float(cond.get("seconds_start", 0.0)),
+                seconds_total=float(cond.get("seconds_total", 0.0)),
+            )
+
+            path, sidecar = output_manager.save_audio(
+                audio_i, meta, self.sample_rate, audio_format, subfolder
+            )
+            results.append(
+                GenerationResult(audio=audio_i, path=path, sidecar_path=sidecar, metadata=meta)
+            )
+
+        if batch_size > 1 and subfolder is not None:
+            output_manager.write_batch_manifest(subfolder, results)
+
+        return results
+
+    # ------------------------------------------------------------------
     # Optional component accessors
     # ------------------------------------------------------------------
 

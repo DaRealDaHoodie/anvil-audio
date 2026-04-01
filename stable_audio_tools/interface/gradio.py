@@ -1,163 +1,255 @@
+"""
+Gradio web interface for stable_audio_tools.
+
+Generation is wired through ``DiffusionPipeline`` so that every call
+participates in the output manager (filenames, JSON sidecars, batch
+manifests).  The interface remains fully functional when launched from the
+CLI via ``run_gradio.py``.
+
+Module-level state
+------------------
+``_pipeline``      : the loaded ``DiffusionPipeline`` (set by ``load_model``).
+``_model_name``    : registry name or ``"custom"`` (used in metadata).
+``_default_project``: project name set at launch via ``--project`` CLI arg.
+``sample_rate``    : updated whenever a new model is loaded.
+``sample_size``    : updated whenever a new model is loaded.
+"""
+
+from __future__ import annotations
+
 import gc
-import gradio as gr
 import json
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import torch
 import torchaudio
-from torchaudio import transforms as T
 from einops import rearrange
+from torchaudio import transforms as T
 
+from ..core.output import GenerationMetadata, OutputManager
+from ..core.pipeline import DiffusionPipeline
+from ..core.registry import registry
 from ..inference.generation import generate_diffusion_cond, generate_diffusion_uncond
-from ..models.factory import create_model_from_config
+from ..models.factory import create_pipeline_from_config
 from ..models.pretrained import get_pretrained_model
 from ..models.utils import load_ckpt_state_dict
-from ..utils.torch_common import copy_state_dict, exists, get_best_device, empty_cache
-from ..utils.audio_utils import float_to_int16_audio
 from ..training.viz import audio_spectrogram_image
+from ..utils.audio_utils import float_to_int16_audio
+from ..utils.torch_common import copy_state_dict, empty_cache, exists, get_best_device
 
-model = None
-sample_rate = 32000
-sample_size = 1920000
-output_dir = ''
+# ---------------------------------------------------------------------------
+# Module-level state
+# ---------------------------------------------------------------------------
+
+_pipeline: DiffusionPipeline | None = None
+_model_name: str = ""
+_default_project: str = ""
+sample_rate: int = 32000
+sample_size: int = 1920000
 
 
-def load_model(model_config=None, model_ckpt_path=None, pretrained_name=None, pretransform_ckpt_path=None, device=None, model_half=False):
-    global model, sample_rate, sample_size
+def _get_pipeline() -> DiffusionPipeline:
+    if _pipeline is None:
+        raise RuntimeError("No model loaded.  Call load_model() first.")
+    return _pipeline
 
-    if device is None:
-        device = get_best_device()
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
+
+def load_model(
+    model_config: dict[str, Any] | None = None,
+    model_ckpt_path: str | None = None,
+    pretrained_name: str | None = None,
+    pretransform_ckpt_path: str | None = None,
+    device: torch.device | str | None = None,
+    model_half: bool = False,
+    project: str = "",
+) -> tuple[DiffusionPipeline, dict[str, Any]]:
+    """Load a model and store it in module-level state.
+
+    Accepts the same arguments as the original ``load_model`` so all existing
+    callers (``create_ui``, tests) continue to work.
+
+    Args:
+        model_config:           Parsed JSON config dict.  Ignored if
+                                *pretrained_name* is given.
+        model_ckpt_path:        Local checkpoint path.  Used with
+                                *model_config*.
+        pretrained_name:        HuggingFace Hub repo ID.  Takes priority.
+        pretransform_ckpt_path: Optional separate VAE checkpoint.
+        device:                 Target device.  Auto-detected if ``None``.
+        model_half:             Cast model weights to float16.
+        project:                Project name for the output manager.
+
+    Returns:
+        ``(pipeline, model_config)`` — ``pipeline`` is also stored in the
+        module-level ``_pipeline`` variable.
+    """
+    global _pipeline, _model_name, _default_project, sample_rate, sample_size
+
+    resolved_device = torch.device(device) if device is not None else get_best_device()
 
     if pretrained_name is not None:
         print(f"->->-> Loading pretrained model {pretrained_name}")
         model, model_config = get_pretrained_model(pretrained_name)
+        _model_name = pretrained_name
     elif model_config is not None and model_ckpt_path is not None:
         print("->->-> Creating model from config")
+        from ..models.factory import create_model_from_config
         model = create_model_from_config(model_config)
-        print(f"->->-> Loading model checkpoint from {model_ckpt_path}")
-        # Load checkpoint
+        print(f"->->-> Loading checkpoint from {model_ckpt_path}")
         copy_state_dict(model, load_ckpt_state_dict(model_ckpt_path))
-        # model.load_state_dict(load_ckpt_state_dict(model_ckpt_path))
+        _model_name = "custom"
     else:
-        raise RuntimeError("One of 'pretrained_name' or 'model_config/model_ckpt_path' must be specified.")
-
-    sample_rate = model_config["sample_rate"]
-    sample_size = model_config["sample_size"]
+        raise RuntimeError(
+            "Provide either 'pretrained_name' or both 'model_config' and 'model_ckpt_path'."
+        )
 
     if pretransform_ckpt_path is not None:
-        print(f"Loading pretransform checkpoint from {pretransform_ckpt_path}")
-        model.pretransform.load_state_dict(load_ckpt_state_dict(pretransform_ckpt_path), strict=False)
-        print("Done loading pretransform")
+        print(f"->->-> Loading pretransform checkpoint from {pretransform_ckpt_path}")
+        model.pretransform.load_state_dict(
+            load_ckpt_state_dict(pretransform_ckpt_path), strict=False
+        )
 
-    model.to(device).eval().requires_grad_(False)
+    model.to(resolved_device).eval().requires_grad_(False)
 
     if model_half:
         model.to(torch.float16)
 
-    print("Done loading model")
+    model_type = model_config.get("model_type", "diffusion_cond")
+    if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "diffusion_prior"}:
+        _pipeline = DiffusionPipeline(
+            model=model,
+            model_config=model_config,
+        )
+        _pipeline._device = resolved_device
+    else:
+        # Non-pipeline model types (autoencoder, lm, diffusion_prior, etc.)
+        # Store the raw model on a shim so the rest of the code can access it.
+        _pipeline = _RawModelShim(model, model_config, resolved_device)  # type: ignore[assignment]
 
-    return model, model_config
+    sample_rate = model_config["sample_rate"]
+    sample_size = model_config["sample_size"]
+    _default_project = project
 
+    print(f"->->-> Model loaded on {resolved_device}")
+    return _pipeline, model_config
+
+
+class _RawModelShim:
+    """Minimal shim so non-pipeline model types still work through the global."""
+
+    def __init__(self, model: Any, config: dict[str, Any], device: torch.device) -> None:
+        self._model = model
+        self._config = config
+        self._device = device
+
+    # Proxy attribute access to the underlying model so existing code that
+    # does `model.pretransform` etc. still works.
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._model, name)
+
+    @property
+    def sample_rate(self) -> int:
+        return self._config["sample_rate"]
+
+    @property
+    def sample_size(self) -> int:
+        return self._config["sample_size"]
+
+
+def _prepare_init_audio(
+    init_audio: tuple[int, Any] | None,
+    use_init: bool,
+) -> tuple[int, torch.Tensor] | None:
+    """Convert Gradio audio input (sr, np.ndarray) to (sr, Tensor)."""
+    if not use_init or init_audio is None:
+        return None
+    in_sr, audio_np = init_audio
+    audio = torch.from_numpy(audio_np).float().div(32767)
+    if audio.dim() == 1:
+        audio = audio.unsqueeze(0)
+    elif audio.dim() == 2:
+        audio = audio.transpose(0, 1)
+    if in_sr != sample_rate:
+        audio = T.Resample(in_sr, sample_rate)(audio)
+    return in_sr, audio
+
+
+# ---------------------------------------------------------------------------
+# Conditional generation
+# ---------------------------------------------------------------------------
 
 def generate_cond(
-    prompt,
-    negative_prompt=None,
-    seconds_start=0,
-    seconds_total=30,
-    cfg_scale=6.0,
-    steps=250,
-    preview_every=None,
-    seed=-1,
-    sampler_type="dpmpp-3m-sde",
-    sigma_min=0.03,
-    sigma_max=1000,
-    cfg_rescale=0.0,
-    use_init=False,
-    init_audio=None,
-    init_noise_level=1.0,
-    mask_cropfrom=None,
-    mask_pastefrom=None,
-    mask_pasteto=None,
-    mask_maskstart=None,
-    mask_maskend=None,
-    mask_softnessL=None,
-    mask_softnessR=None,
-    mask_marination=None,
-    batch_size=1
-):
+    prompt: str,
+    negative_prompt: str | None = None,
+    seconds_start: float = 0,
+    seconds_total: float = 30,
+    cfg_scale: float = 6.0,
+    steps: int = 250,
+    preview_every: int | None = None,
+    seed: int = -1,
+    sampler_type: str = "dpmpp-3m-sde",
+    sigma_min: float = 0.03,
+    sigma_max: float = 1000,
+    cfg_rescale: float = 0.0,
+    use_init: bool = False,
+    init_audio: Any = None,
+    init_noise_level: float = 1.0,
+    mask_cropfrom: float | None = None,
+    mask_pastefrom: float | None = None,
+    mask_pasteto: float | None = None,
+    mask_maskstart: float | None = None,
+    mask_maskend: float | None = None,
+    mask_softnessL: float | None = None,
+    mask_softnessR: float | None = None,
+    mask_marination: float | None = None,
+    batch_size: int = 1,
+    project: str = "",
+) -> tuple[str, list[Any], dict[str, Any]]:
+    """Generate audio from a text prompt.
 
+    Returns:
+        ``(wav_path, spectrogram_images, metadata_dict)``
+    """
+    pipeline = _get_pipeline()
     empty_cache()
     gc.collect()
 
-    print("=== Conditional generation ===")
+    print(f"=== Conditional generation ===")
     print(f"\tPrompt: {prompt}")
-    print(f"\tStart (sec): {seconds_start}")
-    print(f"\tLength (sec): {seconds_total}")
-    print(f"\tCFG scale: {cfg_scale}")
-    print(f"\tSteps: {steps}")
-    print(f"\tSeed: {seed}")
+    print(f"\tStart (sec): {seconds_start}  |  Length (sec): {seconds_total}")
+    print(f"\tCFG scale: {cfg_scale}  |  Steps: {steps}  |  Seed: {seed}")
 
-    global preview_images
-    preview_images = []
-    if preview_every == 0:
-        preview_every = None
+    # Resolve seed before generation so it's captured in metadata
+    effective_seed = int(seed) if int(seed) != -1 else int(np.random.randint(0, 2**32 - 1))
 
-    # Return fake stereo audio
-    conditioning = [{"prompt": prompt, "seconds_start": seconds_start, "seconds_total": seconds_total}] * batch_size
+    conditioning = [
+        {"prompt": prompt, "seconds_start": seconds_start, "seconds_total": seconds_total}
+    ] * batch_size
+    negative_conditioning = (
+        [{"prompt": negative_prompt, "seconds_start": seconds_start, "seconds_total": seconds_total}]
+        * batch_size
+        if negative_prompt
+        else None
+    )
 
-    if negative_prompt:
-        negative_conditioning = [{"prompt": negative_prompt, "seconds_start": seconds_start, "seconds_total": seconds_total}] * batch_size
-    else:
-        negative_conditioning = None
+    init_audio_tensor = _prepare_init_audio(init_audio, use_init)
 
-    # Get the device from the model
-    device = next(model.parameters()).device
-
-    seed = int(seed)
-
-    if not use_init:
-        init_audio = None
-
+    # Extend sample_size if init_audio is longer than the model default
     input_sample_size = sample_size
-
-    if init_audio is not None:
-        in_sr, init_audio = init_audio
-        # Turn into torch tensor, converting from int16 to float32
-        init_audio = torch.from_numpy(init_audio).float().div(32767)
-
-        if init_audio.dim() == 1:
-            init_audio = init_audio.unsqueeze(0)  # [1, n]
-        elif init_audio.dim() == 2:
-            init_audio = init_audio.transpose(0, 1)  # [n, 2] -> [2, n]
-
-        if in_sr != sample_rate:
-            resample_tf = T.Resample(in_sr, sample_rate).to(init_audio.device)
-            init_audio = resample_tf(init_audio)
-
-        audio_length = init_audio.shape[-1]
-
+    if init_audio_tensor is not None:
+        _, audio_t = init_audio_tensor
+        audio_length = audio_t.shape[-1]
         if audio_length > sample_size:
+            min_len = getattr(pipeline, "min_input_length", 1)
+            input_sample_size = audio_length + (min_len - (audio_length % min_len)) % min_len
 
-            input_sample_size = audio_length + (model.min_input_length - (audio_length % model.min_input_length)) % model.min_input_length
-
-        init_audio = (sample_rate, init_audio)
-
-    def progress_callback(callback_info):
-        global preview_images
-        denoised = callback_info["denoised"]
-        current_step = callback_info["i"]
-        sigma = callback_info["sigma"]
-
-        if (current_step - 1) % preview_every == 0:
-            if model.pretransform is not None:
-                denoised = model.pretransform.decode(denoised)
-            denoised = rearrange(denoised, "b d n -> d (b n)")
-            denoised = denoised.clamp(-1, 1).mul(32767).to(torch.int16).cpu()
-            audio_spectrogram = audio_spectrogram_image(denoised, sample_rate=sample_rate)
-            preview_images.append((audio_spectrogram, f"Step {current_step} sigma={sigma:.3f})"))
-
-    # If inpainting, send mask args
-    # This will definitely change in the future
+    mask_args: dict[str, float] | None = None
     if mask_cropfrom is not None:
         mask_args = {
             "cropfrom": mask_cropfrom,
@@ -169,194 +261,379 @@ def generate_cond(
             "softnessR": mask_softnessR,
             "marination": mask_marination,
         }
-    else:
-        mask_args = None
 
-    # Do the audio generation
+    # Preview callback (optional step-by-step spectrograms)
+    preview_images: list[Any] = []
+    if preview_every == 0:
+        preview_every = None
+
+    def _preview_callback(callback_info: dict[str, Any]) -> None:
+        denoised = callback_info["denoised"]
+        current_step = callback_info["i"]
+        if (current_step - 1) % preview_every == 0:  # type: ignore[operator]
+            if pipeline._model.pretransform is not None:
+                denoised = pipeline._model.pretransform.decode(denoised)
+            denoised = rearrange(denoised, "b d n -> d (b n)")
+            denoised = denoised.clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+            preview_images.append(
+                (audio_spectrogram_image(denoised, sample_rate=sample_rate),
+                 f"Step {current_step} sigma={callback_info['sigma']:.3f}")
+            )
+
+    # Generate via pipeline
     audio = generate_diffusion_cond(
-        model,
+        pipeline._model,
         conditioning=conditioning,
         negative_conditioning=negative_conditioning,
         steps=steps,
         cfg_scale=cfg_scale,
         sample_size=input_sample_size,
-        seed=seed,
-        device=device,
+        seed=effective_seed,
+        device=pipeline._device,
         sampler_type=sampler_type,
         sigma_min=sigma_min,
         sigma_max=sigma_max,
-        init_audio=init_audio,
+        init_audio=init_audio_tensor,
         init_noise_level=init_noise_level,
         mask_args=mask_args,
-        callback=progress_callback if preview_every is not None else None,
-        scale_phi=cfg_rescale
+        callback=_preview_callback if preview_every is not None else None,
+        scale_phi=cfg_rescale,
+    )  # [B, C, T]
+
+    # Take first item; clip to seconds_total
+    audio_item = audio.squeeze(0)  # [C, T] or [B, C, T] → [C, T] for batch_size=1
+    if audio.shape[0] > 1:
+        audio_item = audio[0]
+    audio_int16 = float_to_int16_audio(audio_item)
+    length = int(sample_rate * seconds_total)
+    audio_int16 = audio_int16[:, :length]
+
+    # Save via output manager
+    output_manager = OutputManager(project=project or _default_project or None)
+    meta = GenerationMetadata(
+        prompt=prompt,
+        model_name=_model_name,
+        seed=effective_seed,
+        steps=steps,
+        cfg_scale=float(cfg_scale),
+        sampler_type=sampler_type,
+        sigma_min=float(sigma_min),
+        sigma_max=float(sigma_max),
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+        negative_prompt=negative_prompt or "",
+        seconds_start=float(seconds_start),
+        seconds_total=float(seconds_total),
+    )
+    path, _ = output_manager.save_audio(
+        audio_item.cpu(), meta, sample_rate, ext="wav"
     )
 
-    # Convert to WAV file
-    # audio = rearrange(audio, "b d n -> d (b n)")
-    audio = audio.squeeze(0)
-    audio = float_to_int16_audio(audio)
-    # clip audio length
-    length = int(sample_rate * seconds_total)
-    audio = audio[:, :length]
+    spectrogram = audio_spectrogram_image(audio_int16.cpu(), sample_rate=sample_rate)
+    return str(path), [spectrogram, *preview_images], meta.to_dict()
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    torchaudio.save(f"{output_dir}/output.wav", audio, sample_rate)
 
-    # Let's look at a nice spectrogram too
-    audio_spectrogram = audio_spectrogram_image(audio, sample_rate=sample_rate)
-
-    return (f"{output_dir}/output.wav", [audio_spectrogram, *preview_images])
-
+# ---------------------------------------------------------------------------
+# Unconditional generation
+# ---------------------------------------------------------------------------
 
 def generate_uncond(
-    steps=250,
-    seed=-1,
-    sampler_type="dpmpp-3m-sde",
-    sigma_min=0.03,
-    sigma_max=1000,
-    use_init=False,
-    init_audio=None,
-    init_noise_level=1.0,
-    batch_size=1,
-    preview_every=None
-):
-
-    global preview_images
-
-    preview_images = []
-
+    steps: int = 250,
+    seed: int = -1,
+    sampler_type: str = "dpmpp-3m-sde",
+    sigma_min: float = 0.03,
+    sigma_max: float = 1000,
+    use_init: bool = False,
+    init_audio: Any = None,
+    init_noise_level: float = 1.0,
+    batch_size: int = 1,
+    preview_every: int | None = None,
+    project: str = "",
+) -> tuple[str, list[Any]]:
+    pipeline = _get_pipeline()
     empty_cache()
     gc.collect()
 
-    # Get the device from the model
-    device = next(model.parameters()).device
-
-    seed = int(seed)
-
-    if not use_init:
-        init_audio = None
-
+    init_audio_tensor = _prepare_init_audio(init_audio, use_init)
     input_sample_size = sample_size
-
-    if init_audio is not None:
-        in_sr, init_audio = init_audio
-        # Turn into torch tensor, converting from int16 to float32
-        init_audio = torch.from_numpy(init_audio).float().div(32767)
-
-        if init_audio.dim() == 1:
-            init_audio = init_audio.unsqueeze(0)  # [1, n]
-        elif init_audio.dim() == 2:
-            init_audio = init_audio.transpose(0, 1)  # [n, 2] -> [2, n]
-
-        if in_sr != sample_rate:
-            resample_tf = T.Resample(in_sr, sample_rate).to(init_audio.device)
-            init_audio = resample_tf(init_audio)
-
-        audio_length = init_audio.shape[-1]
-
+    if init_audio_tensor is not None:
+        _, audio_t = init_audio_tensor
+        audio_length = audio_t.shape[-1]
         if audio_length > sample_size:
+            min_len = getattr(pipeline, "min_input_length", 1)
+            input_sample_size = audio_length + (min_len - (audio_length % min_len)) % min_len
 
-            input_sample_size = audio_length + (model.min_input_length - (audio_length % model.min_input_length)) % model.min_input_length
+    effective_seed = int(seed) if int(seed) != -1 else int(np.random.randint(0, 2**32 - 1))
 
-        init_audio = (sample_rate, init_audio)
+    preview_images: list[Any] = []
 
-    def progress_callback(callback_info):
-        global preview_images
+    def _preview_callback(callback_info: dict[str, Any]) -> None:
+        if preview_every is None or (callback_info["i"] - 1) % preview_every != 0:
+            return
         denoised = callback_info["denoised"]
-        current_step = callback_info["i"]
-        sigma = callback_info["sigma"]
-
-        if (current_step - 1) % preview_every == 0:
-
-            if model.pretransform is not None:
-                denoised = model.pretransform.decode(denoised)
-
-            denoised = rearrange(denoised, "b d n -> d (b n)")
-
-            denoised = denoised.clamp(-1, 1).mul(32767).to(torch.int16).cpu()
-
-            audio_spectrogram = audio_spectrogram_image(denoised, sample_rate=sample_rate)
-
-            preview_images.append((audio_spectrogram, f"Step {current_step} sigma={sigma:.3f})"))
+        if pipeline._model.pretransform is not None:
+            denoised = pipeline._model.pretransform.decode(denoised)
+        denoised = rearrange(denoised, "b d n -> d (b n)")
+        denoised = denoised.clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+        preview_images.append(
+            (audio_spectrogram_image(denoised, sample_rate=sample_rate),
+             f"Step {callback_info['i']} sigma={callback_info['sigma']:.3f}")
+        )
 
     audio = generate_diffusion_uncond(
-        model,
+        pipeline._model,
         steps=steps,
         batch_size=batch_size,
         sample_size=input_sample_size,
-        seed=seed,
-        device=device,
+        seed=effective_seed,
+        device=pipeline._device,
         sampler_type=sampler_type,
         sigma_min=sigma_min,
         sigma_max=sigma_max,
-        init_audio=init_audio,
+        init_audio=init_audio_tensor,
         init_noise_level=init_noise_level,
-        callback=progress_callback if preview_every is not None else None
+        callback=_preview_callback if preview_every is not None else None,
     )
 
-    audio = rearrange(audio, "b d n -> d (b n)")
+    audio_out = rearrange(audio, "b d n -> d (b n)")
+    audio_int16 = (
+        audio_out.to(torch.float32)
+        .div(torch.max(torch.abs(audio_out)))
+        .clamp(-1, 1)
+        .mul(32767)
+        .to(torch.int16)
+        .cpu()
+    )
 
-    audio = audio.to(torch.float32).div(torch.max(torch.abs(audio))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+    output_manager = OutputManager(project=project or _default_project or None)
+    meta = GenerationMetadata(
+        prompt="(unconditional)",
+        model_name=_model_name,
+        seed=effective_seed,
+        steps=steps,
+        cfg_scale=1.0,
+        sampler_type=sampler_type,
+        sigma_min=float(sigma_min),
+        sigma_max=float(sigma_max),
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    path, _ = output_manager.save_audio(audio_out.cpu(), meta, sample_rate)
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    torchaudio.save(f"{output_dir}/output.wav", audio, sample_rate)
+    spectrogram = audio_spectrogram_image(audio_int16, sample_rate=sample_rate)
+    return str(path), [spectrogram, *preview_images]
 
-    audio_spectrogram = audio_spectrogram_image(audio, sample_rate=sample_rate)
 
-    return (f"{output_dir}/output.wav", [audio_spectrogram, *preview_images])
-
+# ---------------------------------------------------------------------------
+# Language model generation
+# ---------------------------------------------------------------------------
 
 def generate_lm(
-        temperature=1.0,
-        top_p=0.95,
-        top_k=0,
-        batch_size=1,
-):
-
+    temperature: float = 1.0,
+    top_p: float = 0.95,
+    top_k: int = 0,
+    batch_size: int = 1,
+    project: str = "",
+) -> tuple[str, list[Any]]:
+    pipeline = _get_pipeline()
     empty_cache()
     gc.collect()
 
-    audio = model.generate_audio(
+    audio = pipeline._model.generate_audio(
         batch_size=batch_size,
-        max_gen_len=sample_size // model.pretransform.downsampling_ratio,
+        max_gen_len=sample_size // pipeline._model.pretransform.downsampling_ratio,
         conditioning=None,
         temp=temperature,
         top_p=top_p,
         top_k=top_k,
-        use_cache=True
+        use_cache=True,
     )
 
-    audio = rearrange(audio, "b d n -> d (b n)")
+    audio_out = rearrange(audio, "b d n -> d (b n)")
+    audio_int16 = (
+        audio_out.to(torch.float32)
+        .div(torch.max(torch.abs(audio_out)))
+        .clamp(-1, 1)
+        .mul(32767)
+        .to(torch.int16)
+        .cpu()
+    )
 
-    audio = audio.to(torch.float32).div(torch.max(torch.abs(audio))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+    output_manager = OutputManager(project=project or _default_project or None)
+    meta = GenerationMetadata(
+        prompt="(lm)",
+        model_name=_model_name,
+        seed=-1,
+        steps=0,
+        cfg_scale=1.0,
+        sampler_type="lm",
+        sigma_min=0.0,
+        sigma_max=0.0,
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    path, _ = output_manager.save_audio(audio_out.cpu(), meta, sample_rate)
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    torchaudio.save(f"{output_dir}/output.wav", audio, sample_rate)
-
-    audio_spectrogram = audio_spectrogram_image(audio, sample_rate=sample_rate)
-
-    return (f"{output_dir}/output.wav", [audio_spectrogram])
+    spectrogram = audio_spectrogram_image(audio_int16, sample_rate=sample_rate)
+    return str(path), [spectrogram]
 
 
-def create_uncond_sampling_ui(model_config):
-    generate_button = gr.Button("Generate", variant='primary', scale=1)
+# ---------------------------------------------------------------------------
+# Autoencoder / diffusion-prior passthrough (unchanged model logic)
+# ---------------------------------------------------------------------------
+
+def autoencoder_process(
+    audio: Any,
+    latent_noise: float,
+    n_quantizers: int,
+    project: str = "",
+) -> str:
+    pipeline = _get_pipeline()
+    model = pipeline._model
+    empty_cache()
+    gc.collect()
+
+    device = pipeline._device
+    dtype = next(model.parameters()).dtype
+
+    in_sr, audio_np = audio
+    audio_t = torch.from_numpy(audio_np).float().div(32767).to(device)
+    if audio_t.dim() == 1:
+        audio_t = audio_t.unsqueeze(0)
+    else:
+        audio_t = audio_t.transpose(0, 1)
+
+    audio_t = model.preprocess_audio_for_encoder(audio_t, in_sr).to(dtype)
+
+    kwargs_enc: dict[str, Any] = {"chunked": False}
+    kwargs_dec: dict[str, Any] = {"chunked": False}
+    if n_quantizers > 0:
+        kwargs_enc["n_quantizers"] = n_quantizers
+
+    latents = model.encode_audio(audio_t, **kwargs_enc)
+    if latent_noise > 0:
+        latents = latents + torch.randn_like(latents) * latent_noise
+    audio_out = model.decode_audio(latents, **kwargs_dec)
+
+    audio_out = rearrange(audio_out, "b d n -> d (b n)")
+    audio_int16 = audio_out.to(torch.float32).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+
+    output_manager = OutputManager(project=project or _default_project or None)
+    meta = GenerationMetadata(
+        prompt="(autoencoder)",
+        model_name=_model_name,
+        seed=-1,
+        steps=0,
+        cfg_scale=1.0,
+        sampler_type="autoencoder",
+        sigma_min=0.0,
+        sigma_max=0.0,
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    path, _ = output_manager.save_audio(audio_out.cpu(), meta, sample_rate)
+    return str(path)
+
+
+def diffusion_prior_process(
+    audio: Any,
+    steps: int,
+    sampler_type: str,
+    sigma_min: float,
+    sigma_max: float,
+    project: str = "",
+) -> str:
+    pipeline = _get_pipeline()
+    model = pipeline._model
+    empty_cache()
+    gc.collect()
+
+    device = pipeline._device
+    in_sr, audio_np = audio
+    audio_t = torch.from_numpy(audio_np).float().div(32767).to(device)
+    if audio_t.dim() == 1:
+        audio_t = audio_t.unsqueeze(0)
+    elif audio_t.dim() == 2:
+        audio_t = audio_t.transpose(0, 1)
+    audio_t = audio_t.unsqueeze(0)
+
+    audio_out = model.stereoize(
+        audio_t, in_sr, steps,
+        sampler_kwargs={"sampler_type": sampler_type, "sigma_min": sigma_min, "sigma_max": sigma_max},
+    )
+    audio_out = rearrange(audio_out, "b d n -> d (b n)")
+    audio_int16 = (
+        audio_out.to(torch.float32)
+        .div(torch.max(torch.abs(audio_out)))
+        .clamp(-1, 1)
+        .mul(32767)
+        .to(torch.int16)
+        .cpu()
+    )
+
+    output_manager = OutputManager(project=project or _default_project or None)
+    meta = GenerationMetadata(
+        prompt="(diffusion-prior)",
+        model_name=_model_name,
+        seed=-1,
+        steps=steps,
+        cfg_scale=1.0,
+        sampler_type=sampler_type,
+        sigma_min=float(sigma_min),
+        sigma_max=float(sigma_max),
+        duration_seconds=audio_int16.shape[-1] / sample_rate,
+        timestamp=__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+    path, _ = output_manager.save_audio(audio_out.cpu(), meta, sample_rate)
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+
+def _model_load_ui(
+    model_name: str,
+    project: str,
+    model_half: bool,
+    device_str: str,
+) -> str:
+    """Called by the 'Load Model' button in the UI."""
+    try:
+        device = torch.device(device_str) if device_str else get_best_device()
+        load_model(
+            pretrained_name=model_name,
+            device=device,
+            model_half=model_half,
+            project=project,
+        )
+        return f"Loaded: {model_name} on {device}"
+    except Exception as exc:
+        return f"Error loading '{model_name}': {exc}"
+
+
+# ---------------------------------------------------------------------------
+# UI builders
+# ---------------------------------------------------------------------------
+
+def create_uncond_sampling_ui(model_config: dict[str, Any], project_component: Any) -> None:
+    import gradio as gr
+
+    generate_button = gr.Button("Generate", variant="primary", scale=1)
 
     with gr.Row(equal_height=False):
         with gr.Column():
             with gr.Row():
-                # Steps slider
                 steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
+                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0)
 
             with gr.Accordion("Sampler params", open=False):
-
-                # Seed
-                seed_textbox = gr.Textbox(label="Seed (set to -1 for random seed)", value="-1")
-
-            # Sampler params
                 with gr.Row():
-                    sampler_type_dropdown = gr.Dropdown(["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
-                                                        "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"], label="Sampler type", value="dpmpp-3m-sde")
+                    sampler_type_dropdown = gr.Dropdown(
+                        ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
+                         "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
+                        label="Sampler type", value="dpmpp-3m-sde",
+                    )
                     sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
                     sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
 
@@ -369,370 +646,337 @@ def create_uncond_sampling_ui(model_config):
             audio_output = gr.Audio(label="Output audio", interactive=False)
             audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
             send_to_init_button = gr.Button("Send to init audio", scale=1)
-            send_to_init_button.click(fn=lambda audio: audio, inputs=[audio_output], outputs=[init_audio_input])
+            send_to_init_button.click(fn=lambda a: a, inputs=[audio_output], outputs=[init_audio_input])
 
     generate_button.click(
         fn=generate_uncond,
         inputs=[
-            steps_slider,
-            seed_textbox,
-            sampler_type_dropdown,
-            sigma_min_slider,
-            sigma_max_slider,
-            init_audio_checkbox,
-            init_audio_input,
-            init_noise_level_slider,
+            steps_slider, seed_input, sampler_type_dropdown,
+            sigma_min_slider, sigma_max_slider,
+            init_audio_checkbox, init_audio_input, init_noise_level_slider,
+            project_component,
         ],
-        outputs=[
-            audio_output,
-            audio_spectrogram_output
-        ],
-        api_name="generate"
+        outputs=[audio_output, audio_spectrogram_output],
+        api_name="generate",
     )
 
 
-def create_sampling_ui(model_config, inpainting=False):
+def create_sampling_ui(
+    model_config: dict[str, Any],
+    project_component: Any,
+    inpainting: bool = False,
+) -> None:
+    import gradio as gr
+
     with gr.Row():
         with gr.Column(scale=6):
             prompt = gr.Textbox(show_label=False, placeholder="Prompt")
             negative_prompt = gr.Textbox(show_label=False, placeholder="Negative prompt")
-        generate_button = gr.Button("Generate", variant='primary', scale=1)
+        generate_button = gr.Button("Generate", variant="primary", scale=1)
 
     model_conditioning_config = model_config["model"].get("conditioning", None)
-
     has_seconds_start = False
     has_seconds_total = False
-    seconds_total = 0.
+    seconds_total_val = 0.0
     seconds_itv = 0.5
 
     if model_conditioning_config is not None:
-        for conditioning_config in model_conditioning_config["configs"]:
-            if conditioning_config["id"] == "seconds_start":
+        for c in model_conditioning_config["configs"]:
+            if c["id"] == "seconds_start":
                 has_seconds_start = True
-            if conditioning_config["id"] == "seconds_total":
+            if c["id"] == "seconds_total":
                 has_seconds_total = True
-                seconds_total = model_config['sample_size'] / model_config['sample_rate']
-                seconds_total = int(seconds_total / seconds_itv) * seconds_itv
+                seconds_total_val = model_config["sample_size"] / model_config["sample_rate"]
+                seconds_total_val = int(seconds_total_val / seconds_itv) * seconds_itv
 
     with gr.Row(equal_height=False):
         with gr.Column():
             with gr.Row(visible=has_seconds_start or has_seconds_total):
-                # Timing controls
                 seconds_start_slider = gr.Slider(
-                    minimum=0, maximum=seconds_total, step=seconds_itv, value=0, label="Seconds start", visible=has_seconds_start)
+                    minimum=0, maximum=seconds_total_val, step=seconds_itv,
+                    value=0, label="Seconds start", visible=has_seconds_start,
+                )
                 seconds_total_slider = gr.Slider(
-                    minimum=0, maximum=seconds_total, step=seconds_itv, value=seconds_total, label="Seconds total", visible=has_seconds_total)
+                    minimum=0, maximum=seconds_total_val, step=seconds_itv,
+                    value=seconds_total_val, label="Seconds total", visible=has_seconds_total,
+                )
 
             with gr.Row():
-                # Steps slider
                 steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
-
-                # Preview Every slider
                 preview_every_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Preview Every")
-
-                # CFG scale
                 cfg_scale_slider = gr.Slider(minimum=0.0, maximum=25.0, step=0.1, value=7.0, label="CFG scale")
 
+            with gr.Row():
+                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0)
+
             with gr.Accordion("Sampler params", open=False):
-
-                # Seed
-                seed_textbox = gr.Textbox(label="Seed (set to -1 for random seed)", value="-1")
-
-                # Sampler params
                 with gr.Row():
                     sampler_type_dropdown = gr.Dropdown(
-                        ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms", "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
-                        label="Sampler type", value="dpmpp-3m-sde")
+                        ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
+                         "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
+                        label="Sampler type", value="dpmpp-3m-sde",
+                    )
                     sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
                     sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
                     cfg_rescale_slider = gr.Slider(minimum=0.0, maximum=1, step=0.01, value=0.0, label="CFG rescale amount")
 
             if inpainting:
-                # Inpainting Tab
                 with gr.Accordion("Inpainting", open=False):
                     sigma_max_slider.maximum = 1000
-
                     init_audio_checkbox = gr.Checkbox(label="Do inpainting")
                     init_audio_input = gr.Audio(label="Init audio")
-                    init_noise_level_slider = gr.Slider(minimum=0.1, maximum=100.0, step=0.1, value=80,
-                                                        label="Init audio noise level", visible=False)  # hide this
-
-                    mask_cropfrom_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0, label="Crop From %")
-                    mask_pastefrom_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0, label="Paste From %")
-                    mask_pasteto_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Paste To %")
-
-                    mask_maskstart_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=50, label="Mask Start %")
-                    mask_maskend_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Mask End %")
-                    mask_softnessL_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0, label="Softmask Left Crossfade Length %")
-                    mask_softnessR_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0, label="Softmask Right Crossfade Length %")
-                    mask_marination_slider = gr.Slider(minimum=0.0, maximum=1, step=0.0001, value=0,
-                                                       label="Marination level", visible=False)  # still working on the usefulness of this
+                    init_noise_level_slider = gr.Slider(
+                        minimum=0.1, maximum=100.0, step=0.1, value=80,
+                        label="Init audio noise level", visible=False,
+                    )
+                    mask_cropfrom_slider  = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Crop From %")
+                    mask_pastefrom_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Paste From %")
+                    mask_pasteto_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Paste To %")
+                    mask_maskstart_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=50,  label="Mask Start %")
+                    mask_maskend_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Mask End %")
+                    mask_softnessL_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Left Crossfade Length %")
+                    mask_softnessR_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Right Crossfade Length %")
+                    mask_marination_slider = gr.Slider(minimum=0.0, maximum=1, step=0.0001, value=0,   label="Marination level", visible=False)
 
                     inputs = [
-                        prompt,
-                        negative_prompt,
-                        seconds_start_slider,
-                        seconds_total_slider,
-                        cfg_scale_slider,
-                        steps_slider,
-                        preview_every_slider,
-                        seed_textbox,
-                        sampler_type_dropdown,
-                        sigma_min_slider,
-                        sigma_max_slider,
-                        cfg_rescale_slider,
-                        init_audio_checkbox,
-                        init_audio_input,
-                        init_noise_level_slider,
-                        mask_cropfrom_slider,
-                        mask_pastefrom_slider,
-                        mask_pasteto_slider,
-                        mask_maskstart_slider,
-                        mask_maskend_slider,
-                        mask_softnessL_slider,
-                        mask_softnessR_slider,
-                        mask_marination_slider
+                        prompt, negative_prompt,
+                        seconds_start_slider, seconds_total_slider,
+                        cfg_scale_slider, steps_slider, preview_every_slider, seed_input,
+                        sampler_type_dropdown, sigma_min_slider, sigma_max_slider, cfg_rescale_slider,
+                        init_audio_checkbox, init_audio_input, init_noise_level_slider,
+                        mask_cropfrom_slider, mask_pastefrom_slider, mask_pasteto_slider,
+                        mask_maskstart_slider, mask_maskend_slider,
+                        mask_softnessL_slider, mask_softnessR_slider, mask_marination_slider,
+                        gr.State(1),   # batch_size placeholder
+                        project_component,
                     ]
             else:
-                # Default generation tab
                 with gr.Accordion("Init audio", open=False):
                     init_audio_checkbox = gr.Checkbox(label="Use init audio")
                     init_audio_input = gr.Audio(label="Init audio")
-                    init_noise_level_slider = gr.Slider(minimum=0.1, maximum=100.0, step=0.01, value=0.1, label="Init noise level")
+                    init_noise_level_slider = gr.Slider(
+                        minimum=0.1, maximum=100.0, step=0.01, value=0.1, label="Init noise level",
+                    )
 
-                    inputs = [
-                        prompt,
-                        negative_prompt,
-                        seconds_start_slider,
-                        seconds_total_slider,
-                        cfg_scale_slider,
-                        steps_slider,
-                        preview_every_slider,
-                        seed_textbox,
-                        sampler_type_dropdown,
-                        sigma_min_slider,
-                        sigma_max_slider,
-                        cfg_rescale_slider,
-                        init_audio_checkbox,
-                        init_audio_input,
-                        init_noise_level_slider
-                    ]
+                inputs = [
+                    prompt, negative_prompt,
+                    seconds_start_slider, seconds_total_slider,
+                    cfg_scale_slider, steps_slider, preview_every_slider, seed_input,
+                    sampler_type_dropdown, sigma_min_slider, sigma_max_slider, cfg_rescale_slider,
+                    init_audio_checkbox, init_audio_input, init_noise_level_slider,
+                    project_component,
+                ]
 
         with gr.Column():
             audio_output = gr.Audio(label="Output audio", interactive=False)
             audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
+            metadata_output = gr.JSON(label="Generation metadata")
             send_to_init_button = gr.Button("Send to init audio", scale=1)
-            send_to_init_button.click(fn=lambda audio: audio, inputs=[audio_output], outputs=[init_audio_input])
+            send_to_init_button.click(fn=lambda a: a, inputs=[audio_output], outputs=[init_audio_input])
 
     generate_button.click(
         fn=generate_cond,
         inputs=inputs,
-        outputs=[
-            audio_output,
-            audio_spectrogram_output
-        ],
-        api_name="generate"
+        outputs=[audio_output, audio_spectrogram_output, metadata_output],
+        api_name="generate",
     )
 
 
-def create_txt2audio_ui(model_config):
+def create_txt2audio_ui(model_config: dict[str, Any], project_component: Any) -> Any:
+    import gradio as gr
     with gr.Blocks() as ui:
         with gr.Tab("Generation"):
-            create_sampling_ui(model_config)
+            create_sampling_ui(model_config, project_component)
         with gr.Tab("Inpainting"):
-            create_sampling_ui(model_config, inpainting=True)
-
+            create_sampling_ui(model_config, project_component, inpainting=True)
     return ui
 
 
-def create_diffusion_uncond_ui(model_config):
+def create_diffusion_uncond_ui(model_config: dict[str, Any], project_component: Any) -> Any:
+    import gradio as gr
     with gr.Blocks() as ui:
-        create_uncond_sampling_ui(model_config)
-
+        create_uncond_sampling_ui(model_config, project_component)
     return ui
 
 
-def autoencoder_process(audio, latent_noise, n_quantizers):
-    empty_cache()
-    gc.collect()
+def create_autoencoder_ui(model_config: dict[str, Any], project_component: Any) -> Any:
+    import gradio as gr
 
-    # Get the device from the model
-    device = next(model.parameters()).device
-    dtype = next(model.parameters()).dtype
-
-    in_sr, audio = audio
-    audio = torch.from_numpy(audio).float().div(32767).to(device)
-
-    if audio.dim() == 1:
-        audio = audio.unsqueeze(0)
-    else:
-        audio = audio.transpose(0, 1)
-
-    audio = model.preprocess_audio_for_encoder(audio, in_sr)
-    audio = audio.to(dtype)
-
-    # Note: If you need to do chunked encoding, to reduce VRAM,
-    # then add these arguments to encode_audio and decode_audio: chunked=True, overlap=32, chunk_size=128.
-    # See encode_audio & decode_audio in autoencoders.py for more info
-
-    kwargs_enc = {'chunked': False}
-    kwargs_dec = kwargs_enc
-    if n_quantizers > 0:
-        kwargs_enc['n_quantizers'] = n_quantizers
-
-    latents = model.encode_audio(audio, **kwargs_enc)
-
-    if latent_noise > 0:
-        latents = latents + torch.randn_like(latents) * latent_noise
-
-    audio = model.decode_audio(latents, **kwargs_dec)
-
-    audio = rearrange(audio, "b d n -> d (b n)")
-    audio = audio.to(torch.float32).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
-
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    torchaudio.save(f"{output_dir}/output.wav", audio, sample_rate)
-
-    return f"{output_dir}/output.wav"
-
-
-def create_autoencoder_ui(model_config):
-
-    is_dac_rvq = "model" in model_config and "bottleneck" in model_config["model"] and model_config["model"]["bottleneck"]["type"] in [
-        "dac_rvq", "dac_rvq_vae"]
-
-    if is_dac_rvq:
-        n_quantizers = model_config["model"]["bottleneck"]["config"]["n_codebooks"]
-    else:
-        n_quantizers = 0
+    is_dac_rvq = (
+        "model" in model_config
+        and "bottleneck" in model_config["model"]
+        and model_config["model"]["bottleneck"]["type"] in {"dac_rvq", "dac_rvq_vae"}
+    )
+    n_quantizers = (
+        model_config["model"]["bottleneck"]["config"]["n_codebooks"] if is_dac_rvq else 0
+    )
 
     with gr.Blocks() as ui:
         input_audio = gr.Audio(label="Input audio")
         output_audio = gr.Audio(label="Output audio", interactive=False)
-        n_quantizers_slider = gr.Slider(minimum=1, maximum=n_quantizers, step=1, value=n_quantizers, label="# quantizers", visible=is_dac_rvq)
+        n_quantizers_slider = gr.Slider(
+            minimum=1, maximum=n_quantizers, step=1, value=n_quantizers,
+            label="# quantizers", visible=is_dac_rvq,
+        )
         latent_noise_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.001, value=0.0, label="Add latent noise")
-        process_button = gr.Button("Process", variant='primary', scale=1)
-        process_button.click(fn=autoencoder_process, inputs=[input_audio, latent_noise_slider,
-                             n_quantizers_slider], outputs=output_audio, api_name="process")
-
+        process_button = gr.Button("Process", variant="primary", scale=1)
+        process_button.click(
+            fn=autoencoder_process,
+            inputs=[input_audio, latent_noise_slider, n_quantizers_slider, project_component],
+            outputs=output_audio,
+            api_name="process",
+        )
     return ui
 
 
-def diffusion_prior_process(audio, steps, sampler_type, sigma_min, sigma_max):
-
-    empty_cache()
-    gc.collect()
-
-    # Get the device from the model
-    device = next(model.parameters()).device
-
-    in_sr, audio = audio
-
-    audio = torch.from_numpy(audio).float().div(32767).to(device)
-
-    if audio.dim() == 1:
-        audio = audio.unsqueeze(0)  # [1, n]
-    elif audio.dim() == 2:
-        audio = audio.transpose(0, 1)  # [n, 2] -> [2, n]
-
-    audio = audio.unsqueeze(0)
-
-    audio = model.stereoize(audio, in_sr, steps, sampler_kwargs={"sampler_type": sampler_type, "sigma_min": sigma_min, "sigma_max": sigma_max})
-
-    audio = rearrange(audio, "b d n -> d (b n)")
-
-    audio = audio.to(torch.float32).div(torch.max(torch.abs(audio))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
-
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    torchaudio.save(f"{output_dir}/output.wav", audio, sample_rate)
-
-    return f"{output_dir}/output.wav"
-
-
-def create_diffusion_prior_ui(model_config):
+def create_diffusion_prior_ui(model_config: dict[str, Any], project_component: Any) -> Any:
+    import gradio as gr
     with gr.Blocks() as ui:
         input_audio = gr.Audio(label="Input audio")
         output_audio = gr.Audio(label="Output audio", interactive=False)
-        # Sampler params
         with gr.Row():
             steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
-            sampler_type_dropdown = gr.Dropdown(["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
-                                                "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"], label="Sampler type", value="dpmpp-3m-sde")
+            sampler_type_dropdown = gr.Dropdown(
+                ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
+                 "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
+                label="Sampler type", value="dpmpp-3m-sde",
+            )
             sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
             sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
-        process_button = gr.Button("Process", variant='primary', scale=1)
+        process_button = gr.Button("Process", variant="primary", scale=1)
         process_button.click(
             fn=diffusion_prior_process,
-            inputs=[input_audio, steps_slider, sampler_type_dropdown, sigma_min_slider, sigma_max_slider],
-            outputs=output_audio, api_name="process")
-
+            inputs=[input_audio, steps_slider, sampler_type_dropdown,
+                    sigma_min_slider, sigma_max_slider, project_component],
+            outputs=output_audio,
+            api_name="process",
+        )
     return ui
 
 
-def create_lm_ui(model_config):
+def create_lm_ui(model_config: dict[str, Any], project_component: Any) -> Any:
+    import gradio as gr
     with gr.Blocks() as ui:
         output_audio = gr.Audio(label="Output audio", interactive=False)
         audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
-
-        # Sampling params
         with gr.Row():
             temperature_slider = gr.Slider(minimum=0, maximum=5, step=0.01, value=1.0, label="Temperature")
             top_p_slider = gr.Slider(minimum=0, maximum=1, step=0.01, value=0.95, label="Top p")
             top_k_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Top k")
-
-        generate_button = gr.Button("Generate", variant='primary', scale=1)
+        generate_button = gr.Button("Generate", variant="primary", scale=1)
         generate_button.click(
             fn=generate_lm,
-            inputs=[
-                temperature_slider,
-                top_p_slider,
-                top_k_slider
-            ],
+            inputs=[temperature_slider, top_p_slider, top_k_slider, project_component],
             outputs=[output_audio, audio_spectrogram_output],
-            api_name="generate"
+            api_name="generate",
         )
-
     return ui
 
+
+# ---------------------------------------------------------------------------
+# Top-level UI factory
+# ---------------------------------------------------------------------------
 
 def create_ui(
-    model_config_path=None,
-    ckpt_path=None,
-    pretrained_name=None,
-    pretransform_ckpt_path=None,
+    model_config_path: str | None = None,
+    ckpt_path: str | None = None,
+    pretrained_name: str | None = None,
+    pretransform_ckpt_path: str | None = None,
     model_half: bool = False,
-    tmp_dir: str = '',
-    device=None,
-):
-    global output_dir
-    output_dir = tmp_dir
+    tmp_dir: str = "",
+    device: torch.device | None = None,
+    project: str = "",
+) -> Any:
+    """Build and return the Gradio ``Blocks`` interface.
 
-    assert exists(pretrained_name) ^ (exists(model_config_path) and exists(ckpt_path)), \
-        "Must specify either pretrained name or provide a model config and checkpoint, but not both"
+    Args:
+        model_config_path:      Path to a local JSON model config.
+        ckpt_path:              Path to a local checkpoint.
+        pretrained_name:        HuggingFace Hub repo ID.
+        pretransform_ckpt_path: Optional separate pretransform checkpoint.
+        model_half:             Use float16 inference.
+        tmp_dir:                Legacy parameter (ignored; output manager handles paths).
+        device:                 Target device.  Auto-detected if ``None``.
+        project:                Default project name for output routing.
 
+    Returns:
+        A ``gradio.Blocks`` instance ready for ``.queue()`` and ``.launch()``.
+    """
+    import gradio as gr
+
+    assert exists(pretrained_name) ^ (exists(model_config_path) and exists(ckpt_path)), (
+        "Provide either pretrained_name or (model_config_path + ckpt_path), not both."
+    )
+
+    model_config_dict: dict[str, Any] | None = None
     if exists(model_config_path):
-        # Load config from json file
-        with open(model_config_path) as f:
-            model_config = json.load(f)
-    else:
-        model_config = None
+        with open(model_config_path) as fh:
+            model_config_dict = json.load(fh)
 
-    if device is None:
-        device = get_best_device()
-    _, model_config = load_model(model_config, ckpt_path, pretrained_name=pretrained_name,
-                                 pretransform_ckpt_path=pretransform_ckpt_path, model_half=model_half, device=device)
+    _, loaded_config = load_model(
+        model_config=model_config_dict,
+        model_ckpt_path=ckpt_path,
+        pretrained_name=pretrained_name,
+        pretransform_ckpt_path=pretransform_ckpt_path,
+        device=device,
+        model_half=model_half,
+        project=project,
+    )
 
-    model_type = model_config["model_type"]
+    model_type = loaded_config["model_type"]
+    registered_models = [e.name for e in registry.list_models()]
 
-    if model_type == "diffusion_cond":
-        ui = create_txt2audio_ui(model_config)
-    elif model_type == "diffusion_uncond":
-        ui = create_diffusion_uncond_ui(model_config)
-    elif model_type == "autoencoder" or model_type == "diffusion_autoencoder":
-        ui = create_autoencoder_ui(model_config)
-    elif model_type == "diffusion_prior":
-        ui = create_diffusion_prior_ui(model_config)
-    elif model_type == "lm":
-        ui = create_lm_ui(model_config)
+    with gr.Blocks(title="Stable Audio Tools") as interface:
 
-    return ui
+        # ---- Global controls (outside tabs) ----
+        with gr.Row():
+            with gr.Column(scale=3):
+                project_textbox = gr.Textbox(
+                    label="Project",
+                    placeholder="default",
+                    value=project,
+                    info="Output files go to ~/stable-audio-outputs/{project}/",
+                )
+            with gr.Column(scale=3):
+                model_dropdown = gr.Dropdown(
+                    choices=registered_models,
+                    value=pretrained_name if pretrained_name in registered_models else None,
+                    label="Registered model",
+                    info="Select a model then click Load to switch.",
+                )
+                model_half_checkbox = gr.Checkbox(label="Half precision (fp16)", value=model_half)
+            with gr.Column(scale=2):
+                device_textbox = gr.Textbox(
+                    label="Device",
+                    value=str(device) if device else str(get_best_device()),
+                    info="cuda / mps / cpu",
+                )
+                load_model_btn = gr.Button("Load Model", variant="secondary")
+
+        model_status = gr.Textbox(
+            label="Model status",
+            value=f"Loaded: {pretrained_name or 'custom'}",
+            interactive=False,
+        )
+
+        load_model_btn.click(
+            fn=_model_load_ui,
+            inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
+            outputs=[model_status],
+        )
+
+        gr.Markdown("---")
+
+        # ---- Model-type-specific UI ----
+        if model_type == "diffusion_cond":
+            create_txt2audio_ui(loaded_config, project_textbox)
+        elif model_type == "diffusion_uncond":
+            create_diffusion_uncond_ui(loaded_config, project_textbox)
+        elif model_type in {"autoencoder", "diffusion_autoencoder"}:
+            create_autoencoder_ui(loaded_config, project_textbox)
+        elif model_type == "diffusion_prior":
+            create_diffusion_prior_ui(loaded_config, project_textbox)
+        elif model_type == "lm":
+            create_lm_ui(loaded_config, project_textbox)
+
+    return interface

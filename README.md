@@ -29,7 +29,7 @@ Please see an example here -> [generate_conditions.yaml](./example/generation/ge
 # Requirements
 
 - PyTorch 2.0 or later for Flash Attention support
-- Development for the repo is done in Python 3.8.10 or later
+- Python 3.12 or later required
 
 # Install
 

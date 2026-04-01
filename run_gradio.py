@@ -1,3 +1,24 @@
+"""
+Launch the Stable Audio Tools Gradio web interface.
+
+Examples::
+
+    # Pretrained model from HuggingFace Hub
+    python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0
+
+    # Local config + checkpoint
+    python run_gradio.py --model-config config.json --ckpt-path model.ckpt
+
+    # Route outputs to a named project folder
+    python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --project sfx-pack-v1
+
+    # Apple Silicon
+    python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --device mps
+"""
+
+from __future__ import annotations
+
+import argparse
 
 import torch
 
@@ -5,14 +26,10 @@ from stable_audio_tools.interface.gradio import create_ui
 from stable_audio_tools.utils.torch_common import get_best_device
 
 
-def main(args):
+def main(args: argparse.Namespace) -> None:
     torch.manual_seed(42)
 
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = get_best_device()
-
+    device = torch.device(args.device) if args.device else get_best_device()
     print(f"->->-> Using device: {device}")
 
     interface = create_ui(
@@ -23,22 +40,25 @@ def main(args):
         model_half=args.model_half,
         tmp_dir=args.tmp_dir,
         device=device,
+        project=args.project,
     )
     interface.queue()
-    interface.launch(share=True, auth=(args.username, args.password) if args.username is not None else None)
+    interface.launch(
+        share=True,
+        auth=(args.username, args.password) if args.username is not None else None,
+    )
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description='Run gradio interface')
-    parser.add_argument('--pretrained-name', type=str, help='Name of pretrained model', required=False)
-    parser.add_argument('--model-config', type=str, help='Path to model config. Ignored if pretrained-name is specified.', required=False)
-    parser.add_argument('--ckpt-path', type=str, help='Path to model checkpoint. Ignored if pretrained-name is specified.', required=False)
-    parser.add_argument('--pretransform-ckpt-path', type=str, help='Optional to model pretransform checkpoint.', required=False)
-    parser.add_argument('--username', type=str, help='Gradio username', required=False)
-    parser.add_argument('--password', type=str, help='Gradio password', required=False)
-    parser.add_argument('--model-half', action='store_true', help='Whether to use half precision', required=False)
-    parser.add_argument('--tmp-dir', type=str, default='', help="Temporary directory for saving output files")
-    parser.add_argument('--device', type=str, default='', help="Device to use (cuda, mps, cpu). Auto-detects best if not set.")
-    args = parser.parse_args()
-    main(args)
+    parser = argparse.ArgumentParser(description="Run the Stable Audio Tools Gradio interface")
+    parser.add_argument("--pretrained-name", type=str, help="HuggingFace Hub model repo ID", required=False)
+    parser.add_argument("--model-config", type=str, help="Path to model config JSON (ignored if --pretrained-name is set)", required=False)
+    parser.add_argument("--ckpt-path", type=str, help="Path to model checkpoint (ignored if --pretrained-name is set)", required=False)
+    parser.add_argument("--pretransform-ckpt-path", type=str, help="Optional path to pretransform checkpoint", required=False)
+    parser.add_argument("--username", type=str, help="Gradio auth username", required=False)
+    parser.add_argument("--password", type=str, help="Gradio auth password", required=False)
+    parser.add_argument("--model-half", action="store_true", help="Use float16 (half precision) inference")
+    parser.add_argument("--tmp-dir", type=str, default="", help="Legacy parameter (unused; output manager handles paths)")
+    parser.add_argument("--device", type=str, default="", help="Device override: cuda, mps, cpu (auto-detects if not set)")
+    parser.add_argument("--project", type=str, default="", help="Project name — outputs go to ~/stable-audio-outputs/{project}/")
+    main(parser.parse_args())
