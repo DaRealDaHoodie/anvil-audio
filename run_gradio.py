@@ -14,6 +14,9 @@ Examples::
 
     # Apple Silicon
     python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --device mps
+
+    # Create a public share URL (off by default)
+    python run_gradio.py --pretrained-name stabilityai/stable-audio-open-1.0 --share
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ def main(args: argparse.Namespace) -> None:
     )
     interface.queue()
     interface.launch(
-        share=True,
+        share=args.share,
         auth=(args.username, args.password) if args.username is not None else None,
     )
 
@@ -61,4 +64,5 @@ if __name__ == "__main__":
     parser.add_argument("--tmp-dir", type=str, default="", help="Legacy parameter (unused; output manager handles paths)")
     parser.add_argument("--device", type=str, default="", help="Device override: cuda, mps, cpu (auto-detects if not set)")
     parser.add_argument("--project", type=str, default="", help="Project name — outputs go to ~/anvil-audio-outputs/{project}/")
+    parser.add_argument("--share", action="store_true", help="Create a public Gradio share URL")
     main(parser.parse_args())
