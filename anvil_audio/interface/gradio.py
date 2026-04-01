@@ -803,6 +803,15 @@ def create_sampling_ui(
                     cfg_scale_slider, steps_slider, preview_every_slider, seed_input,
                     sampler_type_dropdown, sigma_min_slider, sigma_max_slider, cfg_rescale_slider,
                     init_audio_checkbox, init_audio_input, init_noise_level_slider,
+                    gr.State(None),  # mask_cropfrom
+                    gr.State(None),  # mask_pastefrom
+                    gr.State(None),  # mask_pasteto
+                    gr.State(None),  # mask_maskstart
+                    gr.State(None),  # mask_maskend
+                    gr.State(None),  # mask_softnessL
+                    gr.State(None),  # mask_softnessR
+                    gr.State(None),  # mask_marination
+                    gr.State(1),     # batch_size
                     project_component,
                 ]
 
