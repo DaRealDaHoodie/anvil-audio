@@ -39,7 +39,7 @@ The Stable Audio model family remains the work of Stability AI.
 ## Install
 
 ```bash
-git clone https://github.com/tweaver/anvil-audio.git
+git clone https://github.com/DaRealDaHoodie/anvil-audio.git
 cd anvil-audio
 pip install .
 # avoid Accelerate import error on some setups
