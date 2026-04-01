@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='anvil-audio',
     version='1.0.0',
-    url='https://github.com/tweaver/anvil-audio',
+    url='https://github.com/DaRealDaHoodie/anvil-audio',
     author='T. Weaver (fork of friendly-stable-audio-tools by Yukara Ikemiya and Stability AI)',
     description='A pluggable studio tool for AI audio generation. Swap models, keep your workflow.',
     python_requires='>=3.12',
