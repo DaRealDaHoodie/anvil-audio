@@ -44,19 +44,19 @@ class SelfAttention1d(nn.Module):
         self.out_proj = nn.Conv1d(c_in, c_in, 1)
         self.dropout = nn.Dropout(dropout_rate, inplace=True)
 
-        self.use_flash = torch.cuda.is_available() and version.parse(torch.__version__) >= version.parse('2.0.0')
+        self.use_flash = version.parse(torch.__version__) >= version.parse('2.0.0')
 
         if not self.use_flash:
             return
 
-        device_properties = torch.cuda.get_device_properties(torch.device('cuda'))
+        # Default: use math/mem-efficient attention (works on CUDA, MPS, CPU)
+        self.sdp_kernel_config = (False, True, True)
 
-        if device_properties.major == 8 and device_properties.minor == 0:
-            # Use flash attention for A100 GPUs
-            self.sdp_kernel_config = (True, False, False)
-        else:
-            # Don't use flash attention for other GPUs
-            self.sdp_kernel_config = (False, True, True)
+        if torch.cuda.is_available():
+            device_properties = torch.cuda.get_device_properties(torch.device('cuda'))
+            if device_properties.major == 8 and device_properties.minor == 0:
+                # Flash attention for A100 GPUs
+                self.sdp_kernel_config = (True, False, False)
 
     def forward(self, input):
         n, c, s = input.shape

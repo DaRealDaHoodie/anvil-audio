@@ -9,6 +9,8 @@ import gc
 import torch
 from torch import nn
 
+from ..utils.torch_common import empty_cache
+
 from .adp import NumberEmbedder
 from ..inference.utils import set_audio_channels
 from .factory import create_pretransform_from_config
@@ -152,7 +154,7 @@ class CLAPTextConditioner(Conditioner):
         del self.model.model.audio_branch
 
         gc.collect()
-        torch.cuda.empty_cache()
+        empty_cache()
 
     def set_device(self, device):
         self.to(device)
@@ -236,7 +238,7 @@ class CLAPAudioConditioner(Conditioner):
         del self.model.model.text_branch
 
         gc.collect()
-        torch.cuda.empty_cache()
+        empty_cache()
 
     def set_device(self, device):
         self.to(device)
@@ -480,7 +482,7 @@ class PretransformConditioner(Conditioner):
     def __init__(self, pretransform: Pretransform, output_dim: int):
         super().__init__(pretransform.encoded_channels, output_dim)
         self.pretransform = pretransform
-        self.device = 'cuda'
+        self.device = 'cpu'
 
     def set_device(self, device):
         self.pretransform.to(device)

@@ -6,7 +6,7 @@ import torch
 
 from .utils import prepare_audio
 from .sampling import sample_k, sample_rf
-from stable_audio_tools.utils.torch_common import exists
+from stable_audio_tools.utils.torch_common import exists, empty_cache, get_best_device
 
 
 @torch.no_grad()
@@ -16,13 +16,16 @@ def generate_diffusion_uncond(
     batch_size: int = 1,
     sample_size: int = 2097152,
     seed: int = -1,
-    device: str = "cuda",
+    device=None,
     init_audio: tp.Optional[tp.Tuple[int, torch.Tensor]] = None,
     init_noise_level: float = 1.0,
     return_latents: bool = False,
     disable_tqdm: bool = False,
     **sampler_kwargs
 ) -> torch.Tensor:
+
+    if device is None:
+        device = get_best_device()
 
     # The length of the output in audio samples
     audio_sample_size = sample_size
@@ -102,7 +105,7 @@ def generate_diffusion_cond(
         negative_conditioning_tensors: tp.Optional[dict] = None,
         sample_size: int = 2097152,
         seed: int = -1,
-        device: str = "cuda",
+        device=None,
         init_audio: tp.Optional[tp.Tuple[int, torch.Tensor]] = None,
         init_noise_level: float = 1.0,
         mask_args: dict = None,
@@ -128,6 +131,9 @@ def generate_diffusion_cond(
         return_latents: Whether to return the latents used for generation instead of the decoded audio.
         **sampler_kwargs: Additional keyword arguments to pass to the sampler.
     """
+
+    if device is None:
+        device = get_best_device()
 
     # Set device
     model.conditioner.set_device(device)
@@ -162,10 +168,11 @@ def generate_diffusion_cond(
     # Define the initial noise immediately after setting the seed
     noise = torch.randn([num_sample, model.io_channels, sample_size], device=device)
 
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
-    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
-    torch.backends.cudnn.benchmark = False
+    if str(device).startswith("cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+        torch.backends.cudnn.benchmark = False
 
     if init_audio is not None:
         # The user supplied some initial audio (for inpainting or variation). Let us prepare the input audio.
@@ -249,7 +256,7 @@ def generate_diffusion_cond(
     del noise
     del conditioning_tensors
     del conditioning_inputs
-    torch.cuda.empty_cache()
+    empty_cache(device if isinstance(device, torch.device) else torch.device(device))
 
     # Decode latents back into audio
 

@@ -9,6 +9,26 @@ def exists(x: torch.Tensor):
     return x is not None
 
 
+def get_best_device() -> torch.device:
+    """Return the best available compute device: CUDA > MPS > CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def empty_cache(device: torch.device = None):
+    """Free unused memory on the given device (or best available)."""
+    if device is None:
+        device = get_best_device()
+    device_type = str(device).split(":")[0]
+    if device_type == "cuda":
+        torch.cuda.empty_cache()
+    elif device_type == "mps":
+        torch.mps.empty_cache()
+
+
 def get_world_size():
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return 1

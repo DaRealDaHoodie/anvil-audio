@@ -12,7 +12,7 @@ from ..inference.generation import generate_diffusion_cond, generate_diffusion_u
 from ..models.factory import create_model_from_config
 from ..models.pretrained import get_pretrained_model
 from ..models.utils import load_ckpt_state_dict
-from ..utils.torch_common import copy_state_dict, exists
+from ..utils.torch_common import copy_state_dict, exists, get_best_device, empty_cache
 from ..utils.audio_utils import float_to_int16_audio
 from ..training.viz import audio_spectrogram_image
 
@@ -22,8 +22,11 @@ sample_size = 1920000
 output_dir = ''
 
 
-def load_model(model_config=None, model_ckpt_path=None, pretrained_name=None, pretransform_ckpt_path=None, device="cuda", model_half=False):
+def load_model(model_config=None, model_ckpt_path=None, pretrained_name=None, pretransform_ckpt_path=None, device=None, model_half=False):
     global model, sample_rate, sample_size
+
+    if device is None:
+        device = get_best_device()
 
     if pretrained_name is not None:
         print(f"->->-> Loading pretrained model {pretrained_name}")
@@ -83,8 +86,7 @@ def generate_cond(
     batch_size=1
 ):
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    empty_cache()
     gc.collect()
 
     print("=== Conditional generation ===")
@@ -224,8 +226,7 @@ def generate_uncond(
 
     preview_images = []
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    empty_cache()
     gc.collect()
 
     # Get the device from the model
@@ -313,8 +314,7 @@ def generate_lm(
         batch_size=1,
 ):
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    empty_cache()
     gc.collect()
 
     audio = model.generate_audio(
@@ -553,8 +553,7 @@ def create_diffusion_uncond_ui(model_config):
 
 
 def autoencoder_process(audio, latent_noise, n_quantizers):
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    empty_cache()
     gc.collect()
 
     # Get the device from the model
@@ -621,8 +620,7 @@ def create_autoencoder_ui(model_config):
 
 def diffusion_prior_process(audio, steps, sampler_type, sigma_min, sigma_max):
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    empty_cache()
     gc.collect()
 
     # Get the device from the model
@@ -703,7 +701,8 @@ def create_ui(
     pretrained_name=None,
     pretransform_ckpt_path=None,
     model_half: bool = False,
-    tmp_dir: str = ''
+    tmp_dir: str = '',
+    device=None,
 ):
     global output_dir
     output_dir = tmp_dir
@@ -718,7 +717,8 @@ def create_ui(
     else:
         model_config = None
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device is None:
+        device = get_best_device()
     _, model_config = load_model(model_config, ckpt_path, pretrained_name=pretrained_name,
                                  pretransform_ckpt_path=pretransform_ckpt_path, model_half=model_half, device=device)
 

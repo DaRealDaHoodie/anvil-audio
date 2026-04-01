@@ -2,10 +2,18 @@
 import torch
 
 from stable_audio_tools.interface.gradio import create_ui
+from stable_audio_tools.utils.torch_common import get_best_device
 
 
 def main(args):
     torch.manual_seed(42)
+
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = get_best_device()
+
+    print(f"->->-> Using device: {device}")
 
     interface = create_ui(
         model_config_path=args.model_config,
@@ -13,7 +21,8 @@ def main(args):
         pretrained_name=args.pretrained_name,
         pretransform_ckpt_path=args.pretransform_ckpt_path,
         model_half=args.model_half,
-        tmp_dir=args.tmp_dir
+        tmp_dir=args.tmp_dir,
+        device=device,
     )
     interface.queue()
     interface.launch(share=True, auth=(args.username, args.password) if args.username is not None else None)
@@ -30,5 +39,6 @@ if __name__ == "__main__":
     parser.add_argument('--password', type=str, help='Gradio password', required=False)
     parser.add_argument('--model-half', action='store_true', help='Whether to use half precision', required=False)
     parser.add_argument('--tmp-dir', type=str, default='', help="Temporary directory for saving output files")
+    parser.add_argument('--device', type=str, default='', help="Device to use (cuda, mps, cpu). Auto-detects best if not set.")
     args = parser.parse_args()
     main(args)
