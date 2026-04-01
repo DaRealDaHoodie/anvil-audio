@@ -151,10 +151,20 @@ def generate_diffusion_cond(
         conditioning_tensors = model.conditioner(conditioning)
     conditioning_inputs = model.get_conditioning_inputs(conditioning_tensors)
 
+    # CFG requires an unconditional pass. When no negative conditioning is provided,
+    # auto-generate it using empty prompts so the DiT always has negative tensors.
+    if cfg_scale != 1.0 and negative_conditioning is None and not negative_conditioning_tensors:
+        if conditioning is not None:
+            negative_conditioning = [
+                {k: ("" if k == "prompt" else v) for k, v in cond.items()}
+                for cond in conditioning
+            ]
+
     negative_conditioning_tensors = {}
-    if negative_conditioning or negative_conditioning_tensors:
-        if negative_conditioning_tensors is None:
-            negative_conditioning_tensors = model.conditioner(negative_conditioning)
+    if negative_conditioning is not None:
+        nc_raw = model.conditioner(negative_conditioning)
+        negative_conditioning_tensors = model.get_conditioning_inputs(nc_raw, negative=True)
+    elif negative_conditioning_tensors:
         negative_conditioning_tensors = model.get_conditioning_inputs(negative_conditioning_tensors, negative=True)
 
     # num_sample (batch size) is determined by condition tensor size

@@ -337,7 +337,13 @@ class T5Conditioner(Conditioner):
         attention_mask = encoded["attention_mask"].to(self.device).to(torch.bool)
 
         self.model.eval()
-        with torch.cuda.amp.autocast(dtype=torch.float16) and torch.set_grad_enabled(self.enable_grad):
+        device_type = str(self.device).split(":")[0]
+        autocast_ctx = (
+            torch.amp.autocast(device_type=device_type, dtype=torch.float16)
+            if device_type == "cuda"
+            else torch.inference_mode(mode=False)  # no-op context on MPS/CPU
+        )
+        with autocast_ctx, torch.set_grad_enabled(self.enable_grad):
             embeddings = self.model(
                 input_ids=input_ids, attention_mask=attention_mask
             )["last_hidden_state"]

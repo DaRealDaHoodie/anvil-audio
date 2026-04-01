@@ -156,6 +156,7 @@ def sample_k(
     disable_tqdm: bool = False,
     **extra_args
 ):
+    _device_type = str(device).split(":")[0] if device else "cpu"
     denoiser = K.external.VDenoiser(model_fn)
 
     if exists(cond_fn):
@@ -207,7 +208,12 @@ def sample_k(
         # set the initial latent to noise
         x = noise
 
-    with torch.cuda.amp.autocast():
+    autocast_ctx = (
+        torch.amp.autocast(device_type=_device_type)
+        if _device_type == "cuda"
+        else torch.inference_mode(mode=False)
+    )
+    with autocast_ctx:
         if sampler_type == "k-heun":
             return K.sampling.sample_heun(denoiser, x, sigmas, disable=disable_tqdm, callback=wrapped_callback, extra_args=extra_args)
         elif sampler_type == "k-lms":
