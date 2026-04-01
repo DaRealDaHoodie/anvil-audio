@@ -22,6 +22,7 @@ a unified registry, CLI, and Gradio UI.
 - **`anvil generate` CLI** — multi-GPU via Accelerate, wav/flac/mp3 output, batch YAML conditions, per-run seed control.
 - **Gradio web UI** — project name, seed input, live metadata panel, model dropdown with hot-reload, device field.
 - **Built-in audio editor** — post-processing tab with normalize, trim, fade, time stretch, pitch shift, EQ, and reverb; non-destructive exports with full effects sidecar.
+- **MCP server** — expose all generation and editing capabilities to Claude and other MCP clients over stdio; models are cached between calls.
 - **Python 3.12+** — uses modern union syntax, `slots=True` dataclasses, and lowercase generics throughout.
 
 ---
@@ -245,6 +246,88 @@ the full effects chain so you can always trace what was applied and replay it.
 
 You can also drag any audio file into the source field to edit files from
 outside Anvil.
+
+---
+
+## MCP Server
+
+Anvil exposes its full capabilities as an [MCP](https://modelcontextprotocol.io) server so
+Claude and other MCP clients can generate and edit audio directly without the Gradio UI or
+manual CLI commands.
+
+### Install
+
+```bash
+pip install mcp
+```
+
+The `mcp` package is not installed by default. Everything else is already a dependency.
+
+### Available tools
+
+| Tool | What it does |
+|---|---|
+| `generate_audio` | Generate a clip from a prompt; auto-selects model if not specified |
+| `batch_generate` | Generate multiple clips in one call |
+| `edit_audio` | Post-process a file with normalize, trim, EQ, reverb, etc. |
+| `list_models` | All registered models with type, limits, and loaded status |
+| `get_model_info` | Full details for one model |
+| `list_recent_outputs` | Recent output files with their metadata, newest-first |
+| `get_generation_metadata` | Read the sidecar for any output file |
+| `list_projects` | Project folders under `~/anvil-audio-outputs/` |
+| `set_active_project` | Set a default project so you don't repeat it every call |
+
+Models are loaded lazily on first use and cached between calls — switching between
+two models during a session only pays the load cost once per model.
+
+### Claude Desktop config
+
+Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(create the file if it doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "anvil-audio": {
+      "command": "/path/to/anvil-audio/.venv/bin/python",
+      "args": ["-m", "anvil_audio.mcp_server"]
+    }
+  }
+}
+```
+
+Replace `/path/to/anvil-audio` with the absolute path to your clone.
+
+### Claude Code config
+
+Add to `~/.claude.json` under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "anvil-audio": {
+      "command": "/path/to/anvil-audio/.venv/bin/python",
+      "args": ["-m", "anvil_audio.mcp_server"],
+      "type": "stdio"
+    }
+  }
+}
+```
+
+### Example session
+
+Once configured, Claude can generate and edit audio directly:
+
+```
+You:    Generate a short thunderstorm ambience clip
+Claude: [calls generate_audio(prompt="thunderstorm ambience, rain, distant thunder", duration_seconds=20)]
+        Generated: ~/anvil-audio-outputs/default/20260401_181907_thunderstorm_...wav
+
+You:    Add a slight fade in and normalize it to -14 LUFS
+Claude: [calls edit_audio(file_path="...", fade_in=2.0, normalize=True,
+                          normalize_target_db=-14, normalize_lufs=True)]
+        Exported: ~/anvil-audio-outputs/default/20260401_181942_edit_...wav
+```
 
 ---
 
@@ -480,7 +563,7 @@ singularity build anvil-audio.sif docker-daemon://anvil-audio
 - [x] ACE-Step v1.5 integration (turbo + SFT, lyrics support, Gradio UI)
 - [ ] Post-processing pipeline (EQ, normalize, fade)
 - [ ] PyPI package (`pip install anvil-audio`)
-- [ ] MCP server integration
+- [x] MCP server integration
 - [ ] Add more audio augmentations
 - [ ] Add troubleshooting section
 - [ ] Add contribution guidelines
