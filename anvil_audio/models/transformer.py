@@ -295,7 +295,7 @@ class Attention(nn.Module):
         dim_context: tp.Optional[int] = None,
         causal: bool = False,
         zero_init_output: bool = True,
-        qk_norm: bool = False,
+        qk_norm: tp.Union[bool, str] = False,
         natten_kernel_size: tp.Optional[int] = None
     ):
         super().__init__()
@@ -318,7 +318,12 @@ class Attention(nn.Module):
         if zero_init_output:
             nn.init.zeros_(self.to_out.weight)
 
+        # qk_norm=True  → L2 cosine-sim normalisation (original behaviour)
+        # qk_norm="ln"  → per-head LayerNorm (required by stable-audio-open-small)
         self.qk_norm = qk_norm
+        if qk_norm == "ln":
+            self.q_norm = nn.LayerNorm(dim_heads, elementwise_affine=True)
+            self.k_norm = nn.LayerNorm(dim_heads, elementwise_affine=True)
 
         # Using 1d neighborhood attention
         self.natten_kernel_size = natten_kernel_size
@@ -430,8 +435,11 @@ class Attention(nn.Module):
             q, k, v = self.to_qkv(x).chunk(3, dim=-1)
             q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
 
-        # Normalize q and k for cosine sim attention
-        if self.qk_norm:
+        # Normalize q and k
+        if self.qk_norm == "ln":
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+        elif self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
