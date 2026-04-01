@@ -171,6 +171,17 @@ class ModelRegistry:
                     "sigma_max": 500.0,
                 },
             ),
+            RegistryEntry(
+                name="stable-audio-open-small",
+                pretrained_name="stabilityai/stable-audio-open-small",
+                default_params={
+                    "steps": 25,
+                    "cfg_scale": 1.0,
+                    "sampler_type": "dpmpp-3m-sde",
+                    "sigma_min": 0.3,
+                    "sigma_max": 1.0,
+                },
+            ),
         ]
         for entry in builtin:
             self._entries[entry.name] = entry

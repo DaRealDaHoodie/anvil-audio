@@ -276,6 +276,8 @@ def sample_rf_denoiser(
     steps=100,
     sigma_max=1,
     device=None,
+    callback=None,
+    cond_fn=None,
     disable_tqdm: bool = False,
     **extra_args
 ):

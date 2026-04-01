@@ -270,7 +270,7 @@ def generate_diffusion_cond(
 
         sampled = sample_rf_denoiser(
             model.model, noise, init_data=init_audio, steps=steps, **sampler_kwargs, **conditioning_inputs, **negative_conditioning_tensors,
-            device=device, disable_tqdm=disable_tqdm
+            cfg_scale=cfg_scale, batch_cfg=True, rescale_cfg=True, device=device, disable_tqdm=disable_tqdm
         )
     else:
         raise RuntimeError(f"No such sampling mode: '{diff_objective}'")

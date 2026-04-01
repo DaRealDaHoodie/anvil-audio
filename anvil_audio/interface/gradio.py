@@ -618,6 +618,33 @@ def _model_load_ui(
         return f"Error loading '{model_name}': {exc}"
 
 
+def _model_load_ui_with_params(
+    model_name: str,
+    project: str,
+    model_half: bool,
+    device_str: str,
+) -> tuple:
+    """Like _model_load_ui but also returns registry default_params to update UI sliders.
+
+    Returns (status, steps, cfg_scale, sampler_type, sigma_min, sigma_max) × 2 tabs = 11 values.
+    """
+    import gradio as gr
+
+    status = _model_load_ui(model_name, project, model_half, device_str)
+    entry = registry.get_model(model_name)
+    p = entry.resolved_params() if entry else {}
+
+    updates = (
+        gr.update(value=p.get("steps", 100)),
+        gr.update(value=p.get("cfg_scale", 7.0)),
+        gr.update(value=p.get("sampler_type", "dpmpp-3m-sde")),
+        gr.update(value=p.get("sigma_min", 0.03)),
+        gr.update(value=p.get("sigma_max", 500.0)),
+    )
+    # Return updates for both Generation and Inpainting tabs
+    return (status,) + updates + updates
+
+
 # ---------------------------------------------------------------------------
 # UI builders
 # ---------------------------------------------------------------------------
@@ -793,15 +820,17 @@ def create_sampling_ui(
         api_name="generate",
     )
 
+    return steps_slider, cfg_scale_slider, sampler_type_dropdown, sigma_min_slider, sigma_max_slider
+
 
 def create_txt2audio_ui(model_config: dict[str, Any], project_component: Any) -> Any:
     import gradio as gr
     with gr.Blocks() as ui:
         with gr.Tab("Generation"):
-            create_sampling_ui(model_config, project_component)
+            gen_params = create_sampling_ui(model_config, project_component)
         with gr.Tab("Inpainting"):
-            create_sampling_ui(model_config, project_component, inpainting=True)
-    return ui
+            inpaint_params = create_sampling_ui(model_config, project_component, inpainting=True)
+    return gen_params + inpaint_params
 
 
 def create_diffusion_uncond_ui(model_config: dict[str, Any], project_component: Any) -> Any:
@@ -973,17 +1002,13 @@ def create_ui(
             interactive=False,
         )
 
-        load_model_btn.click(
-            fn=_model_load_ui,
-            inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
-            outputs=[model_status],
-        )
-
         gr.Markdown("---")
 
         # ---- Model-type-specific UI ----
+        # Create UI first so we have component references for the Load Model click handler.
+        param_comps: tuple = ()
         if model_type == "diffusion_cond":
-            create_txt2audio_ui(loaded_config, project_textbox)
+            param_comps = create_txt2audio_ui(loaded_config, project_textbox)
         elif model_type == "diffusion_uncond":
             create_diffusion_uncond_ui(loaded_config, project_textbox)
         elif model_type in {"autoencoder", "diffusion_autoencoder"}:
@@ -992,5 +1017,19 @@ def create_ui(
             create_diffusion_prior_ui(loaded_config, project_textbox)
         elif model_type == "lm":
             create_lm_ui(loaded_config, project_textbox)
+
+        # Wire Load Model button — also pushes registry default_params to sliders when available.
+        if param_comps:
+            load_model_btn.click(
+                fn=_model_load_ui_with_params,
+                inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
+                outputs=[model_status, *param_comps],
+            )
+        else:
+            load_model_btn.click(
+                fn=_model_load_ui,
+                inputs=[model_dropdown, project_textbox, model_half_checkbox, device_textbox],
+                outputs=[model_status],
+            )
 
     return interface
