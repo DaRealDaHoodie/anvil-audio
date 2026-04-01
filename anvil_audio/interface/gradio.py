@@ -591,6 +591,56 @@ def generate_acestep(
     return str(path), [spectrogram], meta.to_dict()
 
 
+def generate_unified(
+    prompt: str,
+    lyrics: str,
+    negative_prompt: str,
+    seconds_start: float,
+    seconds_total: float,
+    steps: int,
+    preview_every: int,
+    cfg_scale: float,
+    seed: int,
+    sampler_type: str,
+    sigma_min: float,
+    sigma_max: float,
+    cfg_rescale: float,
+    use_init: bool,
+    init_audio: Any,
+    init_noise_level: float,
+    project: str,
+) -> tuple[str, list[Any], dict[str, Any]]:
+    """Route to the correct generation backend based on the currently loaded pipeline type."""
+    if _pipeline_type == "acestep":
+        return generate_acestep(
+            prompt=prompt,
+            lyrics=lyrics,
+            seconds_total=seconds_total,
+            steps=steps,
+            cfg_scale=cfg_scale,
+            seed=seed,
+            project=project,
+        )
+    return generate_cond(
+        prompt=prompt,
+        negative_prompt=negative_prompt or None,
+        seconds_start=seconds_start,
+        seconds_total=seconds_total,
+        cfg_scale=cfg_scale,
+        steps=steps,
+        preview_every=preview_every,
+        seed=seed,
+        sampler_type=sampler_type,
+        sigma_min=sigma_min,
+        sigma_max=sigma_max,
+        cfg_rescale=cfg_rescale,
+        use_init=use_init,
+        init_audio=init_audio,
+        init_noise_level=init_noise_level,
+        project=project,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Autoencoder / diffusion-prior passthrough (unchanged model logic)
 # ---------------------------------------------------------------------------
@@ -785,6 +835,44 @@ def _model_load_ui_with_acestep_params(
         gr.update(value=int(p.get("audio_duration", 60))),
         gr.update(value=int(p.get("steps", 50))),
         gr.update(value=float(p.get("cfg_scale", 4.0))),
+    )
+
+
+def _model_load_ui_unified(
+    model_name: str,
+    project: str,
+    model_half: bool,
+    device_str: str,
+) -> tuple:
+    import gradio as gr
+    status = _model_load_ui(model_name, project, model_half, device_str)
+    entry = registry.get_model(model_name)
+    is_as = entry is not None and getattr(entry, "pipeline_type", "diffusion") == "acestep"
+    p = entry.resolved_params() if entry else {}
+    if is_as:
+        return (
+            status,
+            gr.update(visible=True),   # lyrics_row
+            gr.update(visible=False),  # neg_prompt_row
+            gr.update(visible=False),  # diffusion_controls
+            gr.update(value=int(p.get("audio_duration", 60))),
+            gr.update(value=int(p.get("steps", 50))),
+            gr.update(value=float(p.get("cfg_scale", 4.0))),
+            gr.update(value="ode"),
+            gr.update(value=0.0),
+            gr.update(value=0.0),
+        )
+    return (
+        status,
+        gr.update(visible=False),  # lyrics_row
+        gr.update(visible=True),   # neg_prompt_row
+        gr.update(visible=True),   # diffusion_controls
+        gr.update(),               # seconds_total — keep current value
+        gr.update(value=int(p.get("steps", 100))),
+        gr.update(value=float(p.get("cfg_scale", 7.0))),
+        gr.update(value=p.get("sampler_type", "dpmpp-3m-sde")),
+        gr.update(value=float(p.get("sigma_min", 0.03))),
+        gr.update(value=float(p.get("sigma_max", 500.0))),
     )
 
 
@@ -1158,6 +1246,187 @@ def create_lm_ui(model_config: dict[str, Any], project_component: Any) -> Any:
     return ui
 
 
+def create_unified_txt2music_ui(
+    project_component: Any,
+    initial_model_type: str = "diffusion_cond",
+    initial_params: dict | None = None,
+    model_config: dict[str, Any] | None = None,
+) -> tuple:
+    """Build one panel covering both diffusion_cond and ACE-Step pipelines.
+
+    Visibility of pipeline-specific rows is toggled at runtime by the Load Model
+    button via _model_load_ui_unified.
+
+    Returns:
+        (lyrics_row, neg_prompt_row, diffusion_controls,
+         seconds_total_slider, steps_slider, cfg_scale_slider,
+         sampler_type_dropdown, sigma_min_slider, sigma_max_slider)
+    """
+    import gradio as gr
+
+    dp = initial_params or {}
+    is_acestep = initial_model_type == "acestep"
+    is_diffusion = not is_acestep
+
+    has_seconds_start = False
+    if model_config is not None and is_diffusion:
+        mc = model_config.get("model", {}).get("conditioning")
+        if mc:
+            for c in mc.get("configs", []):
+                if c["id"] == "seconds_start":
+                    has_seconds_start = True
+
+    if is_acestep:
+        default_steps = int(dp.get("steps", 50))
+        default_cfg = float(dp.get("cfg_scale", 4.0))
+        default_duration = int(dp.get("audio_duration", 60))
+        default_sampler = "ode"
+        default_sigma_min = 0.0
+        default_sigma_max = 0.0
+    else:
+        default_steps = int(dp.get("steps", 100))
+        default_cfg = float(dp.get("cfg_scale", 7.0))
+        if model_config is not None:
+            raw = model_config.get("sample_size", 1920000) / model_config.get("sample_rate", 32000)
+            default_duration = int(raw / 0.5) * 0.5
+        else:
+            default_duration = 60.0
+        default_sampler = dp.get("sampler_type", "dpmpp-3m-sde")
+        default_sigma_min = float(dp.get("sigma_min", 0.03))
+        default_sigma_max = float(dp.get("sigma_max", 500.0))
+
+    with gr.Row():
+        with gr.Column(scale=6):
+            prompt = gr.Textbox(
+                show_label=False,
+                placeholder="Prompt",
+                info="Describe the sound or music you want to generate.",
+            )
+            with gr.Row(visible=is_acestep) as lyrics_row:
+                lyrics = gr.Textbox(
+                    show_label=False,
+                    placeholder="Lyrics  (optional — leave blank or type '[Instrumental]' for no vocals)",
+                    lines=4,
+                    info="Structure lyrics with section markers like [verse], [chorus], [bridge].",
+                )
+            with gr.Row(visible=is_diffusion) as neg_prompt_row:
+                negative_prompt = gr.Textbox(
+                    show_label=False,
+                    placeholder="Negative prompt",
+                    info="Describe what you don't want in the output. Leave blank to skip.",
+                )
+        generate_button = gr.Button("Generate", variant="primary", scale=1)
+
+    with gr.Row(equal_height=False):
+        with gr.Column():
+            with gr.Row():
+                seconds_start_slider = gr.Slider(
+                    minimum=0, maximum=240, step=0.5,
+                    value=0, label="Seconds start",
+                    visible=(is_diffusion and has_seconds_start),
+                    info="Where in the audio timeline generation starts.",
+                )
+                seconds_total_slider = gr.Slider(
+                    minimum=0, maximum=240, step=1,
+                    value=default_duration, label="Duration (seconds)",
+                    info="Target audio length in seconds.",
+                )
+
+            with gr.Row():
+                steps_slider = gr.Slider(
+                    minimum=1, maximum=500, step=1,
+                    value=default_steps, label="Steps",
+                    info="More steps = higher quality but slower.",
+                )
+                preview_every_slider = gr.Slider(
+                    minimum=0, maximum=100, step=1,
+                    value=0, label="Preview Every",
+                    visible=is_diffusion,
+                    info="Show a spectrogram preview every N steps. 0 to disable.",
+                )
+                cfg_scale_slider = gr.Slider(
+                    minimum=0, maximum=30, step=0.1,
+                    value=default_cfg, label="CFG scale",
+                    info="How closely the output follows your prompt.",
+                )
+
+            with gr.Row():
+                seed_input = gr.Number(
+                    label="Seed (-1 = random)", value=-1, precision=0,
+                    info="Lock this number to reproduce the exact same output.",
+                )
+
+            with gr.Group(visible=is_diffusion) as diffusion_controls:
+                with gr.Accordion("Sampler params", open=False):
+                    with gr.Row():
+                        sampler_type_dropdown = gr.Dropdown(
+                            ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
+                             "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
+                            label="Sampler type", value=default_sampler,
+                            allow_custom_value=True,
+                            info="The algorithm used to generate audio.",
+                        )
+                        sigma_min_slider = gr.Slider(
+                            minimum=0.0, maximum=2.0, step=0.01,
+                            value=default_sigma_min, label="Sigma min",
+                            info="Lower bound of the noise schedule.",
+                        )
+                        sigma_max_slider = gr.Slider(
+                            minimum=0.0, maximum=1000.0, step=0.1,
+                            value=default_sigma_max, label="Sigma max",
+                            info="Upper bound of the noise schedule.",
+                        )
+                        cfg_rescale_slider = gr.Slider(
+                            minimum=0.0, maximum=1, step=0.01,
+                            value=0.0, label="CFG rescale amount",
+                            info="Reduces CFG artifacts at high guidance scales.",
+                        )
+
+                with gr.Accordion("Init audio", open=False):
+                    init_audio_checkbox = gr.Checkbox(
+                        label="Use init audio — upload audio to guide the generation",
+                    )
+                    init_audio_input = gr.Audio(
+                        label="Init audio — reference file for variation",
+                    )
+                    init_noise_level_slider = gr.Slider(
+                        minimum=0.1, maximum=100.0, step=0.01,
+                        value=0.1, label="Init noise level",
+                        info="How much noise to add to the init audio before regenerating.",
+                    )
+
+        with gr.Column():
+            audio_output = gr.Audio(label="Output audio", interactive=False)
+            audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
+            metadata_output = gr.JSON(label="Generation metadata")
+            send_to_init_button = gr.Button("Send to init audio", scale=1)
+            send_to_init_button.click(
+                fn=lambda a: a,
+                inputs=[audio_output],
+                outputs=[init_audio_input],
+            )
+
+    generate_button.click(
+        fn=generate_unified,
+        inputs=[
+            prompt, lyrics, negative_prompt,
+            seconds_start_slider, seconds_total_slider,
+            steps_slider, preview_every_slider, cfg_scale_slider, seed_input,
+            sampler_type_dropdown, sigma_min_slider, sigma_max_slider, cfg_rescale_slider,
+            init_audio_checkbox, init_audio_input, init_noise_level_slider,
+            project_component,
+        ],
+        outputs=[audio_output, audio_spectrogram_output, metadata_output],
+        api_name="generate",
+    )
+
+    return (
+        lyrics_row, neg_prompt_row, diffusion_controls,
+        seconds_total_slider, steps_slider, cfg_scale_slider,
+        sampler_type_dropdown, sigma_min_slider, sigma_max_slider,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level UI factory
 # ---------------------------------------------------------------------------
@@ -1272,39 +1541,33 @@ def create_ui(
         gr.Markdown("---")
 
         # ---- Model-type-specific UI ----
-        # Create UI first so we have component references for the Load Model click handler.
-        # param_comps is non-empty only for diffusion_cond — that's the only type whose
-        # Load Model button also updates sampler param sliders.  All other types (including
-        # ACE-Step) use a simple status-only return from the button handler.
-        param_comps: tuple = ()
-        if model_type == "acestep":
-            param_comps = create_acestep_ui(project_textbox, default_params=_entry.resolved_params() if _entry else None)
-        elif model_type == "diffusion_cond":
-            param_comps = create_txt2audio_ui(loaded_config, project_textbox)
-        elif model_type == "diffusion_uncond":
-            create_diffusion_uncond_ui(loaded_config, project_textbox)
-        elif model_type in {"autoencoder", "diffusion_autoencoder"}:
-            create_autoencoder_ui(loaded_config, project_textbox)
-        elif model_type == "diffusion_prior":
-            create_diffusion_prior_ui(loaded_config, project_textbox)
-        elif model_type == "lm":
-            create_lm_ui(loaded_config, project_textbox)
-
-        # Wire Load Model button — also pushes registry default_params to sliders when available.
         _btn_inputs = [model_dropdown, project_textbox, model_half_checkbox, device_textbox]
-        if param_comps and model_type == "acestep":
-            load_model_btn.click(
-                fn=_model_load_ui_with_acestep_params,
-                inputs=_btn_inputs,
-                outputs=[model_status, *param_comps],
+
+        if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "acestep"}:
+            # Unified panel handles both diffusion and ACE-Step with show/hide
+            _mc = loaded_config if model_type != "acestep" else None
+            _init_params = _entry.resolved_params() if _entry else {}
+            param_comps = create_unified_txt2music_ui(
+                project_textbox,
+                initial_model_type=model_type,
+                initial_params=_init_params,
+                model_config=_mc,
             )
-        elif param_comps:
             load_model_btn.click(
-                fn=_model_load_ui_with_params,
+                fn=_model_load_ui_unified,
                 inputs=_btn_inputs,
                 outputs=[model_status, *param_comps],
             )
         else:
+            # Non-text2music model types keep their existing dedicated UIs
+            if model_type == "diffusion_uncond":
+                create_diffusion_uncond_ui(loaded_config, project_textbox)
+            elif model_type in {"autoencoder", "diffusion_autoencoder"}:
+                create_autoencoder_ui(loaded_config, project_textbox)
+            elif model_type == "diffusion_prior":
+                create_diffusion_prior_ui(loaded_config, project_textbox)
+            elif model_type == "lm":
+                create_lm_ui(loaded_config, project_textbox)
             load_model_btn.click(
                 fn=_model_load_ui,
                 inputs=_btn_inputs,
