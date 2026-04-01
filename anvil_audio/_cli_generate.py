@@ -190,7 +190,11 @@ def _load_conditions(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
         }
     with open(args.cond_yaml_path) as fh:
         raw = yaml.safe_load(fh)
-    return _flatten_dict(raw)
+    conds = _flatten_dict(raw)
+    for cond in conds.values():
+        cond.setdefault("seconds_start", 0.0)
+        cond.setdefault("seconds_total", args.seconds_total)
+    return conds
 
 
 # ---------------------------------------------------------------------------
