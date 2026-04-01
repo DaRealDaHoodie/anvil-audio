@@ -343,17 +343,14 @@ def export_audio(
 # ---------------------------------------------------------------------------
 
 def _load_audio_from_path(path: str) -> tuple[int, np.ndarray] | None:
-    """Load a WAV/FLAC/MP3 from disk and return Gradio-format audio."""
+    """Load a WAV/FLAC from disk and return Gradio-format (sr, int16 ndarray)."""
     if not path:
         return None
     try:
-        import torchaudio
-        wav, sr = torchaudio.load(path)
-        # wav: (C, N) float32 in [-1, 1]
-        arr = (wav.numpy() * 32767.0).astype(np.int16)
-        if arr.shape[0] == 1:
-            return sr, arr[0]
-        return sr, arr.T   # (C, N) → (N, C)
+        import soundfile as sf
+        # sf.read returns (N,) mono or (N, C) stereo in float64, already Gradio layout
+        data, sr = sf.read(path, dtype="int16", always_2d=False)
+        return sr, data
     except Exception as exc:
         print(f"[edit] Failed to load {path}: {exc}")
         return None
