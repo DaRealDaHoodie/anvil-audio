@@ -601,13 +601,19 @@ def _model_load_ui(
     """Called by the 'Load Model' button in the UI."""
     try:
         device = torch.device(device_str) if device_str else get_best_device()
+
+        # Resolve registry short-name → real HuggingFace pretrained_name.
+        # If the name isn't in the registry, treat it as a raw HF repo ID.
+        entry = registry.get_model(model_name)
+        resolved_pretrained = entry.pretrained_name if entry and entry.pretrained_name else model_name
+
         load_model(
-            pretrained_name=model_name,
+            pretrained_name=resolved_pretrained,
             device=device,
             model_half=model_half,
             project=project,
         )
-        return f"Loaded: {model_name} on {device}"
+        return f"Loaded: {model_name} ({resolved_pretrained}) on {device}"
     except Exception as exc:
         return f"Error loading '{model_name}': {exc}"
 

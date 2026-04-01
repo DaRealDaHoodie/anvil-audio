@@ -145,6 +145,10 @@ class ModelRegistry:
             )
         return self._entries[name]
 
+    def get_model(self, name: str) -> "RegistryEntry | None":
+        """Return the entry for *name*, or ``None`` if not found."""
+        return self._entries.get(name)
+
     def list_models(self) -> list[RegistryEntry]:
         """Return all registered entries sorted by name."""
         return sorted(self._entries.values(), key=lambda e: e.name)
