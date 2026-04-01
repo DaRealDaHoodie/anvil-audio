@@ -18,6 +18,15 @@ import sys
 
 
 def main() -> None:
+    # Apply warning filters before any heavy imports happen inside subcommands.
+    # --verbose anywhere in argv disables them; we also strip the flag so
+    # subcommand parsers don't complain about an unrecognised argument.
+    _verbose = "--verbose" in sys.argv
+    sys.argv = [a for a in sys.argv if a != "--verbose"]
+    if not _verbose:
+        from anvil_audio._warning_filters import apply_filters
+        apply_filters()
+
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         _print_help()
         sys.exit(0)
@@ -39,7 +48,10 @@ def _print_help() -> None:
     print(
         "Anvil Audio — pluggable AI audio generation\n"
         "\n"
-        "Usage:  anvil <subcommand> [options]\n"
+        "Usage:  anvil [--verbose] <subcommand> [options]\n"
+        "\n"
+        "Global flags:\n"
+        "  --verbose   Show all upstream deprecation warnings (default: suppressed)\n"
         "\n"
         "Subcommands:\n"
         "  generate    Generate audio from a model and prompt\n"

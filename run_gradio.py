@@ -27,8 +27,16 @@ Examples::
 
 from __future__ import annotations
 
-import argparse
 import sys
+
+# Apply warning filters before heavy ML packages are imported.
+# Checked against raw sys.argv so filters are active at import time,
+# before argparse has had a chance to run.
+if "--verbose" not in sys.argv:
+    from anvil_audio._warning_filters import apply_filters
+    apply_filters()
+
+import argparse
 
 import torch
 
@@ -148,4 +156,5 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="", help="Device override: cuda, mps, cpu (auto-detects if not set)")
     parser.add_argument("--project", type=str, default="", help="Project name — outputs go to ~/anvil-audio-outputs/{project}/")
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share URL")
+    parser.add_argument("--verbose", action="store_true", help="Disable warning filters — show all upstream deprecation warnings (useful for debugging)")
     main(parser.parse_args())
