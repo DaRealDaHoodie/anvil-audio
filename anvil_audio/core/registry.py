@@ -84,6 +84,14 @@ class RegistryEntry:
         pipeline_type:      ``"diffusion"`` (default) or ``"acestep"``.
         acestep_project_root: Path to the ACE-Step repository root (required
                             when ``pipeline_type == "acestep"``).
+        max_duration:       Maximum allowed generation duration in seconds.
+                            For diffusion models this is ``sample_size /
+                            sample_rate`` from the model config; set it
+                            explicitly here to override or to declare a limit
+                            for custom models that Anvil cannot infer
+                            automatically.  ``None`` means no explicit limit
+                            (the UI and CLI fall back to the model config or a
+                            safe default).
     """
 
     name: str
@@ -94,6 +102,7 @@ class RegistryEntry:
     default_params: dict[str, Any] = field(default_factory=dict)
     pipeline_type: str = "diffusion"
     acestep_project_root: str | None = None
+    max_duration: float | None = None
 
     def resolved_params(self) -> dict[str, Any]:
         """Return generation params merged over the global defaults."""
@@ -193,6 +202,7 @@ class ModelRegistry:
             RegistryEntry(
                 name="stable-audio-open-1.0",
                 pretrained_name="stabilityai/stable-audio-open-1.0",
+                max_duration=47.0,
                 default_params={
                     "steps": 100,
                     "cfg_scale": 7.0,
@@ -204,6 +214,7 @@ class ModelRegistry:
             RegistryEntry(
                 name="stable-audio-open-small",
                 pretrained_name="stabilityai/stable-audio-open-small",
+                max_duration=11.0,
                 default_params={
                     "steps": 25,
                     "cfg_scale": 1.0,
@@ -231,6 +242,7 @@ class ModelRegistry:
                     pipeline_type="acestep",
                     acestep_project_root=_acestep_root,
                     model_config_path="acestep-v15-turbo",
+                    max_duration=600.0,
                     default_params={
                         "steps": 50,
                         "cfg_scale": 4.0,
@@ -245,6 +257,7 @@ class ModelRegistry:
                     pipeline_type="acestep",
                     acestep_project_root=_acestep_root,
                     model_config_path="acestep-v15-sft",
+                    max_duration=600.0,
                     default_params={
                         "steps": 100,
                         "cfg_scale": 4.0,
@@ -297,6 +310,7 @@ class ModelRegistry:
                 print(f"[registry] WARNING: Skipping invalid entry: {item!r}")
                 continue
             try:
+                raw_max = item.get("max_duration")
                 entry = RegistryEntry(
                     name=item["name"],
                     pretrained_name=item.get("pretrained_name"),
@@ -306,6 +320,7 @@ class ModelRegistry:
                     default_params=item.get("default_params") or {},
                     pipeline_type=item.get("pipeline_type", "diffusion"),
                     acestep_project_root=item.get("acestep_project_root"),
+                    max_duration=float(raw_max) if raw_max is not None else None,
                 )
                 entry.validate()
                 self._entries[entry.name] = entry

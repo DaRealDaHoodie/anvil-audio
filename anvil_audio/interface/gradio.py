@@ -857,25 +857,35 @@ def _model_load_ui_unified(
     entry = registry.get_model(model_name)
     is_as = entry is not None and getattr(entry, "pipeline_type", "diffusion") == "acestep"
     p = entry.resolved_params() if entry else {}
+
     if is_as:
+        max_dur = (entry.max_duration if entry and entry.max_duration else 600.0)
+        dur_val = min(int(p.get("audio_duration", 60)), max_dur)
         return (
             status,
             gr.update(visible=True),   # lyrics_row
             gr.update(visible=False),  # neg_prompt_row
             gr.update(visible=False),  # diffusion_controls
-            gr.update(value=int(p.get("audio_duration", 60))),
+            gr.update(value=dur_val, maximum=max_dur),
             gr.update(value=int(p.get("steps", 50))),
             gr.update(value=float(p.get("cfg_scale", 4.0))),
             gr.update(value="ode"),
             gr.update(value=0.0),
             gr.update(value=0.0),
         )
+
+    # Diffusion model: max duration from registry entry or loaded model config
+    if entry and entry.max_duration:
+        max_dur = entry.max_duration
+    else:
+        # sample_size / sample_rate are updated by load_model() called inside _model_load_ui
+        max_dur = sample_size / sample_rate if sample_rate else 240.0
     return (
         status,
         gr.update(visible=False),  # lyrics_row
         gr.update(visible=True),   # neg_prompt_row
         gr.update(visible=True),   # diffusion_controls
-        gr.update(),               # seconds_total — keep current value
+        gr.update(maximum=max_dur),
         gr.update(value=int(p.get("steps", 100))),
         gr.update(value=float(p.get("cfg_scale", 7.0))),
         gr.update(value=p.get("sampler_type", "dpmpp-3m-sde")),
@@ -1259,6 +1269,7 @@ def create_unified_txt2music_ui(
     initial_model_type: str = "diffusion_cond",
     initial_params: dict | None = None,
     model_config: dict[str, Any] | None = None,
+    initial_max_duration: float | None = None,
 ) -> tuple:
     """Build one panel covering both diffusion_cond and ACE-Step pipelines.
 
@@ -1291,6 +1302,7 @@ def create_unified_txt2music_ui(
         default_sampler = "ode"
         default_sigma_min = 0.0
         default_sigma_max = 0.0
+        slider_max = initial_max_duration or 600.0
     else:
         default_steps = int(dp.get("steps", 100))
         default_cfg = float(dp.get("cfg_scale", 7.0))
@@ -1298,10 +1310,16 @@ def create_unified_txt2music_ui(
             raw = model_config.get("sample_size", 1920000) / model_config.get("sample_rate", 32000)
             default_duration = int(raw / 0.5) * 0.5
         else:
-            default_duration = 60.0
+            default_duration = 30.0
         default_sampler = dp.get("sampler_type", "dpmpp-3m-sde")
         default_sigma_min = float(dp.get("sigma_min", 0.03))
         default_sigma_max = float(dp.get("sigma_max", 500.0))
+        if initial_max_duration is not None:
+            slider_max = initial_max_duration
+        elif model_config is not None:
+            slider_max = model_config.get("sample_size", 1920000) / model_config.get("sample_rate", 32000)
+        else:
+            slider_max = 240.0
 
     with gr.Row():
         with gr.Column(scale=6):
@@ -1335,8 +1353,8 @@ def create_unified_txt2music_ui(
                     info="Where in the audio timeline generation starts.",
                 )
                 seconds_total_slider = gr.Slider(
-                    minimum=0, maximum=240, step=1,
-                    value=default_duration, label="Duration (seconds)",
+                    minimum=0, maximum=slider_max, step=1,
+                    value=min(default_duration, slider_max), label="Duration (seconds)",
                     info="Target audio length in seconds.",
                 )
 
@@ -1559,11 +1577,13 @@ def create_ui(
                     # Unified panel handles both diffusion and ACE-Step with show/hide
                     _mc = loaded_config if model_type != "acestep" else None
                     _init_params = _entry.resolved_params() if _entry else {}
+                    _max_dur = _entry.max_duration if _entry else None
                     param_comps = create_unified_txt2music_ui(
                         project_textbox,
                         initial_model_type=model_type,
                         initial_params=_init_params,
                         model_config=_mc,
+                        initial_max_duration=_max_dur,
                     )
                     load_model_btn.click(
                         fn=_model_load_ui_unified,

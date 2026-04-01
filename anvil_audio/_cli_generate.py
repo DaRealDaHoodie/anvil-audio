@@ -311,6 +311,15 @@ def main() -> None:
 
     batch_window = args.batch_size
 
+    # Resolve max duration: registry entry → model config → no limit
+    _max_duration: float | None = None
+    if args.model:
+        _reg_entry = registry.get_model(args.model)
+        if _reg_entry and _reg_entry.max_duration:
+            _max_duration = _reg_entry.max_duration
+    if _max_duration is None and isinstance(pipeline, DiffusionPipeline):
+        _max_duration = pipeline.sample_size / pipeline.sample_rate
+
     # Load conditions and expand by n_sample_per_cond
     conds = _load_conditions(args)
     path_full: list[str] = []
@@ -318,7 +327,21 @@ def main() -> None:
     for p, cond in conds.items():
         for idx in range(args.n_sample_per_cond):
             path_full.append(f"{p}_item-{idx + 1}")
-            conds_full.append(cond)
+            conds_full.append(dict(cond))  # shallow copy so we can mutate safely
+
+    # Clamp seconds_total to model max and warn once per unique overage
+    if _max_duration is not None:
+        _warned: set[float] = set()
+        for cond in conds_full:
+            st = float(cond.get("seconds_total", 0.0))
+            if st > _max_duration:
+                if st not in _warned:
+                    print(
+                        f"[warn] seconds_total={st:.1f}s exceeds model max "
+                        f"{_max_duration:.1f}s — clamping to {_max_duration:.1f}s"
+                    )
+                    _warned.add(st)
+                cond["seconds_total"] = _max_duration
 
     # Print info (main process only)
     if rank == 0:
