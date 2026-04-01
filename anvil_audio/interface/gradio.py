@@ -666,6 +666,7 @@ def create_uncond_sampling_ui(model_config: dict[str, Any], project_component: A
                         ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
                          "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
                         label="Sampler type", value="dpmpp-3m-sde",
+                        allow_custom_value=True,
                         info="The algorithm used to generate audio. dpmpp-3m-sde is recommended for most use cases.",
                     )
                     sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min", info="Lower bound of the noise schedule. Leave at default unless you know what you're doing.")
@@ -751,6 +752,7 @@ def create_sampling_ui(
                         ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
                          "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
                         label="Sampler type", value="dpmpp-3m-sde",
+                        allow_custom_value=True,
                         info="The algorithm used to generate audio. dpmpp-3m-sde is recommended for most use cases.",
                     )
                     sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min", info="Lower bound of the noise schedule. Leave at default unless you know what you're doing.")
