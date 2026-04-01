@@ -41,6 +41,11 @@ The Stable Audio model family remains the work of Stability AI.
 ```bash
 git clone https://github.com/DaRealDaHoodie/anvil-audio.git
 cd anvil-audio
+
+# create and activate a virtual environment (recommended, especially for Homebrew Python users)
+python3 -m venv .venv
+source .venv/bin/activate
+
 pip install .
 # avoid Accelerate import error on some setups
 pip uninstall -y transformer-engine
