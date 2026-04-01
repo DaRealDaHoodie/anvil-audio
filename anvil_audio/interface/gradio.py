@@ -624,8 +624,8 @@ def create_uncond_sampling_ui(model_config: dict[str, Any], project_component: A
     with gr.Row(equal_height=False):
         with gr.Column():
             with gr.Row():
-                steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
-                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0)
+                steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps", info="More steps = higher quality but slower. 100 is a good default, 50 for quick drafts.")
+                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0, info="Lock this number to reproduce the exact same output. -1 means random each time.")
 
             with gr.Accordion("Sampler params", open=False):
                 with gr.Row():
@@ -633,14 +633,15 @@ def create_uncond_sampling_ui(model_config: dict[str, Any], project_component: A
                         ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
                          "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
                         label="Sampler type", value="dpmpp-3m-sde",
+                        info="The algorithm used to generate audio. dpmpp-3m-sde is recommended for most use cases.",
                     )
-                    sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
-                    sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
+                    sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min", info="Lower bound of the noise schedule. Leave at default unless you know what you're doing.")
+                    sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max", info="Upper bound of the noise schedule. Leave at default unless you know what you're doing.")
 
             with gr.Accordion("Init audio", open=False):
                 init_audio_checkbox = gr.Checkbox(label="Use init audio")
                 init_audio_input = gr.Audio(label="Init audio")
-                init_noise_level_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.01, value=0.1, label="Init noise level")
+                init_noise_level_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.01, value=0.1, label="Init noise level", info="How much noise to add to the init audio before regenerating. Higher = more variation from the original.")
 
         with gr.Column():
             audio_output = gr.Audio(label="Output audio", interactive=False)
@@ -670,8 +671,8 @@ def create_sampling_ui(
 
     with gr.Row():
         with gr.Column(scale=6):
-            prompt = gr.Textbox(show_label=False, placeholder="Prompt")
-            negative_prompt = gr.Textbox(show_label=False, placeholder="Negative prompt")
+            prompt = gr.Textbox(show_label=False, placeholder="Prompt", info="Describe the sound you want to generate — be specific about qualities like 'warm', 'sharp', 'reverberant', 'dry'.")
+            negative_prompt = gr.Textbox(show_label=False, placeholder="Negative prompt", info="Describe what you don't want in the output, e.g. 'music', 'reverb', 'noise'. Leave blank to skip.")
         generate_button = gr.Button("Generate", variant="primary", scale=1)
 
     model_conditioning_config = model_config["model"].get("conditioning", None)
@@ -695,19 +696,21 @@ def create_sampling_ui(
                 seconds_start_slider = gr.Slider(
                     minimum=0, maximum=seconds_total_val, step=seconds_itv,
                     value=0, label="Seconds start", visible=has_seconds_start,
+                    info="Where in the model's audio timeline generation starts. Keep at 0 unless you want a specific placement.",
                 )
                 seconds_total_slider = gr.Slider(
                     minimum=0, maximum=seconds_total_val, step=seconds_itv,
                     value=seconds_total_val, label="Seconds total", visible=has_seconds_total,
+                    info="How long the generated audio will be, in seconds. The output file is trimmed to this length.",
                 )
 
             with gr.Row():
-                steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
-                preview_every_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Preview Every")
-                cfg_scale_slider = gr.Slider(minimum=0.0, maximum=25.0, step=0.1, value=7.0, label="CFG scale")
+                steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps", info="More steps = higher quality but slower. 100 is a good default, 50 for quick drafts.")
+                preview_every_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Preview Every", info="Show a spectrogram preview every N steps while generating. 0 to disable — previews slow things down.")
+                cfg_scale_slider = gr.Slider(minimum=0.0, maximum=25.0, step=0.1, value=7.0, label="CFG scale", info="How closely the output follows your prompt. Higher = more literal, lower = more creative. Start around 7.")
 
             with gr.Row():
-                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0)
+                seed_input = gr.Number(label="Seed (-1 = random)", value=-1, precision=0, info="Lock this number to reproduce the exact same output. -1 means random each time.")
 
             with gr.Accordion("Sampler params", open=False):
                 with gr.Row():
@@ -715,27 +718,29 @@ def create_sampling_ui(
                         ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
                          "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
                         label="Sampler type", value="dpmpp-3m-sde",
+                        info="The algorithm used to generate audio. dpmpp-3m-sde is recommended for most use cases.",
                     )
-                    sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
-                    sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
-                    cfg_rescale_slider = gr.Slider(minimum=0.0, maximum=1, step=0.01, value=0.0, label="CFG rescale amount")
+                    sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min", info="Lower bound of the noise schedule. Leave at default unless you know what you're doing.")
+                    sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max", info="Upper bound of the noise schedule. Leave at default unless you know what you're doing.")
+                    cfg_rescale_slider = gr.Slider(minimum=0.0, maximum=1, step=0.01, value=0.0, label="CFG rescale amount", info="Reduces CFG artifacts at high guidance scales. Try 0.7 if outputs sound distorted at high CFG. 0 = off.")
 
             if inpainting:
                 with gr.Accordion("Inpainting", open=False):
                     sigma_max_slider.maximum = 1000
-                    init_audio_checkbox = gr.Checkbox(label="Do inpainting")
-                    init_audio_input = gr.Audio(label="Init audio")
+                    init_audio_checkbox = gr.Checkbox(label="Do inpainting", info="Enable to regenerate only a portion of an existing audio file using the mask settings below.")
+                    init_audio_input = gr.Audio(label="Init audio", info="The audio file to use as a starting point for inpainting or variation.")
                     init_noise_level_slider = gr.Slider(
                         minimum=0.1, maximum=100.0, step=0.1, value=80,
                         label="Init audio noise level", visible=False,
+                        info="How much noise to add before regenerating the masked region. 80 is a good starting point.",
                     )
-                    mask_cropfrom_slider  = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Crop From %")
-                    mask_pastefrom_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Paste From %")
-                    mask_pasteto_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Paste To %")
-                    mask_maskstart_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=50,  label="Mask Start %")
-                    mask_maskend_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Mask End %")
-                    mask_softnessL_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Left Crossfade Length %")
-                    mask_softnessR_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Right Crossfade Length %")
+                    mask_cropfrom_slider  = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Crop From %",                    info="Where (%) in the source audio to start cropping the section you want to replace.")
+                    mask_pastefrom_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Paste From %",                   info="Where (%) in the output to paste the regenerated region.")
+                    mask_pasteto_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Paste To %",                     info="Where (%) in the output the pasted region ends.")
+                    mask_maskstart_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=50,  label="Mask Start %",                   info="Where (%) within the pasted region the inpainting mask begins.")
+                    mask_maskend_slider   = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=100, label="Mask End %",                     info="Where (%) within the pasted region the inpainting mask ends.")
+                    mask_softnessL_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Left Crossfade Length %",  info="How gradually (%) the mask fades in on the left edge. 0 = hard cut, higher = smoother blend.")
+                    mask_softnessR_slider = gr.Slider(minimum=0.0, maximum=100.0, step=0.1, value=0,   label="Softmask Right Crossfade Length %", info="How gradually (%) the mask fades out on the right edge. 0 = hard cut, higher = smoother blend.")
                     mask_marination_slider = gr.Slider(minimum=0.0, maximum=1, step=0.0001, value=0,   label="Marination level", visible=False)
 
                     inputs = [
@@ -752,10 +757,11 @@ def create_sampling_ui(
                     ]
             else:
                 with gr.Accordion("Init audio", open=False):
-                    init_audio_checkbox = gr.Checkbox(label="Use init audio")
-                    init_audio_input = gr.Audio(label="Init audio")
+                    init_audio_checkbox = gr.Checkbox(label="Use init audio", info="Upload audio to guide the generation — the model will create a variation of it rather than from scratch.")
+                    init_audio_input = gr.Audio(label="Init audio", info="The reference audio file for variation. Higher init noise level = more deviation from this file.")
                     init_noise_level_slider = gr.Slider(
                         minimum=0.1, maximum=100.0, step=0.01, value=0.1, label="Init noise level",
+                        info="How much noise to add to the init audio before regenerating. Higher = more variation from the original.",
                     )
 
                 inputs = [
@@ -817,8 +823,9 @@ def create_autoencoder_ui(model_config: dict[str, Any], project_component: Any) 
         n_quantizers_slider = gr.Slider(
             minimum=1, maximum=n_quantizers, step=1, value=n_quantizers,
             label="# quantizers", visible=is_dac_rvq,
+            info="Number of RVQ codebooks to use. Fewer = smaller file size, more lossy. Use max for best quality.",
         )
-        latent_noise_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.001, value=0.0, label="Add latent noise")
+        latent_noise_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.001, value=0.0, label="Add latent noise", info="Add random noise to the encoded latent before decoding. 0 = clean reconstruction, higher = creative variation.")
         process_button = gr.Button("Process", variant="primary", scale=1)
         process_button.click(
             fn=autoencoder_process,
@@ -835,14 +842,15 @@ def create_diffusion_prior_ui(model_config: dict[str, Any], project_component: A
         input_audio = gr.Audio(label="Input audio")
         output_audio = gr.Audio(label="Output audio", interactive=False)
         with gr.Row():
-            steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps")
+            steps_slider = gr.Slider(minimum=1, maximum=500, step=1, value=100, label="Steps", info="More steps = higher quality but slower. 100 is a good default, 50 for quick drafts.")
             sampler_type_dropdown = gr.Dropdown(
                 ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
                  "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
                 label="Sampler type", value="dpmpp-3m-sde",
+                info="The algorithm used to generate audio. dpmpp-3m-sde is recommended for most use cases.",
             )
-            sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min")
-            sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max")
+            sigma_min_slider = gr.Slider(minimum=0.0, maximum=2.0, step=0.01, value=0.03, label="Sigma min", info="Lower bound of the noise schedule. Leave at default unless you know what you're doing.")
+            sigma_max_slider = gr.Slider(minimum=0.0, maximum=1000.0, step=0.1, value=500, label="Sigma max", info="Upper bound of the noise schedule. Leave at default unless you know what you're doing.")
         process_button = gr.Button("Process", variant="primary", scale=1)
         process_button.click(
             fn=diffusion_prior_process,
@@ -860,9 +868,9 @@ def create_lm_ui(model_config: dict[str, Any], project_component: Any) -> Any:
         output_audio = gr.Audio(label="Output audio", interactive=False)
         audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
         with gr.Row():
-            temperature_slider = gr.Slider(minimum=0, maximum=5, step=0.01, value=1.0, label="Temperature")
-            top_p_slider = gr.Slider(minimum=0, maximum=1, step=0.01, value=0.95, label="Top p")
-            top_k_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Top k")
+            temperature_slider = gr.Slider(minimum=0, maximum=5, step=0.01, value=1.0, label="Temperature", info="Controls randomness. Higher = more surprising/varied output, lower = more predictable. 1.0 is neutral.")
+            top_p_slider = gr.Slider(minimum=0, maximum=1, step=0.01, value=0.95, label="Top p", info="Nucleus sampling threshold. Keeps only the most likely tokens summing to this probability. 0.95 is standard.")
+            top_k_slider = gr.Slider(minimum=0, maximum=100, step=1, value=0, label="Top k", info="Limits sampling to the top K most likely tokens at each step. 0 = disabled (use top_p instead).")
         generate_button = gr.Button("Generate", variant="primary", scale=1)
         generate_button.click(
             fn=generate_lm,
@@ -935,21 +943,21 @@ def create_ui(
                     label="Project",
                     placeholder="default",
                     value=project,
-                    info="Output files go to ~/anvil-audio-outputs/{project}/",
+                    info="Keeps your files organized by project. Outputs go to ~/anvil-audio-outputs/{project}/. Leave blank for 'default'.",
                 )
             with gr.Column(scale=3):
                 model_dropdown = gr.Dropdown(
                     choices=registered_models,
                     value=pretrained_name if pretrained_name in registered_models else None,
                     label="Registered model",
-                    info="Select a model then click Load to switch.",
+                    info="Choose a registered model by name. Click Load to switch without restarting. Add your own in ~/.anvil-audio/registry.yaml.",
                 )
-                model_half_checkbox = gr.Checkbox(label="Half precision (fp16)", value=model_half)
+                model_half_checkbox = gr.Checkbox(label="Half precision (fp16)", value=model_half, info="Uses float16 instead of float32 — cuts memory in half with minimal quality loss. Recommended on GPUs.")
             with gr.Column(scale=2):
                 device_textbox = gr.Textbox(
                     label="Device",
                     value=str(device) if device else str(get_best_device()),
-                    info="cuda / mps / cpu",
+                    info="Device to run generation on. 'mps' for Apple Silicon, 'cuda' for NVIDIA, 'cpu' as a last resort (very slow).",
                 )
                 load_model_btn = gr.Button("Load Model", variant="secondary")
 
