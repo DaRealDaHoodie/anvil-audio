@@ -22,14 +22,17 @@ import json
 import math
 import sys
 import yaml
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torchaudio
 from accelerate import Accelerator
 
 from anvil_audio.core import load_pipeline, registry
+from anvil_audio.core.output import GenerationMetadata, OutputManager
 from anvil_audio.core.pipeline import DiffusionPipeline
 from anvil_audio.utils.torch_common import count_parameters, get_rank, get_world_size, get_best_device
 from anvil_audio.utils.audio_utils import float_to_int16_audio
@@ -292,6 +295,20 @@ def main() -> None:
 
     steps = args.sample_steps  # None means use pipeline default
 
+    # Resolve seed and effective generation params for sidecar metadata
+    effective_seed = (
+        args.seed if args.seed != -1
+        else int(np.random.randint(0, 2**32 - 1, dtype=np.uint32))
+    )
+    effective_steps = steps if steps is not None else pipeline.default_params.get("steps", 100)
+    model_name = args.model or "custom"
+    gen_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _output_mgr = OutputManager(base_dir=args.output_dir)
+    effective_cfg = gen_kwargs.get("cfg_scale", pipeline.default_params.get("cfg_scale", 7.0))
+    effective_sampler = gen_kwargs.get("sampler_type", pipeline.default_params.get("sampler_type", "dpmpp-3m-sde"))
+    effective_sigma_min = gen_kwargs.get("sigma_min", pipeline.default_params.get("sigma_min", 0.3))
+    effective_sigma_max = gen_kwargs.get("sigma_max", pipeline.default_params.get("sigma_max", 500.0))
+
     # Effective batch window (CFG doubles the batch internally)
     cfg = gen_kwargs.get("cfg_scale", pipeline.default_params.get("cfg_scale", 7.0))
     batch_window = max(args.batch_size // 2, 1) if cfg != 1.0 else args.batch_size
@@ -341,7 +358,7 @@ def main() -> None:
         samples = pipeline.generate(
             conditioning=conds_i,
             steps=steps,
-            seed=args.seed,
+            seed=effective_seed,
             disable_tqdm=(rank != 0),
             **gen_kwargs,
         )
@@ -353,6 +370,23 @@ def main() -> None:
                 audio = audio[:, :L]
             save_path = f"{args.output_dir}/{path_i[j]}.{args.format}"
             _save_audio(audio, save_path, sample_rate, args.format)
+
+            meta = GenerationMetadata(
+                prompt=conds_i[j].get("prompt", ""),
+                model_name=model_name,
+                seed=effective_seed,
+                steps=effective_steps,
+                cfg_scale=float(effective_cfg),
+                sampler_type=str(effective_sampler),
+                sigma_min=float(effective_sigma_min),
+                sigma_max=float(effective_sigma_max),
+                duration_seconds=audio.shape[-1] / sample_rate,
+                timestamp=gen_ts,
+                negative_prompt=conds_i[j].get("negative_prompt", ""),
+                seconds_start=float(conds_i[j].get("seconds_start", 0.0)),
+                seconds_total=float(conds_i[j].get("seconds_total", 0.0)),
+            )
+            _output_mgr.write_sidecar(Path(save_path), meta)
 
     print(f"->->-> Rank-{rank}: Finished.")
 
