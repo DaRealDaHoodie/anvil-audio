@@ -31,16 +31,16 @@ import torch.nn as nn
 from torch import Tensor
 
 from .interfaces import BaseCompressor, BaseConditioner, BaseGenerator, BasePipeline
-from stable_audio_tools.utils.torch_common import get_best_device
+from anvil_audio.utils.torch_common import get_best_device
 
 if TYPE_CHECKING:
     # Avoid heavyweight imports at module load; only needed for type checkers.
-    from stable_audio_tools.models.pretransforms import AutoencoderPretransform
-    from stable_audio_tools.models.conditioners import (
+    from anvil_audio.models.pretransforms import AutoencoderPretransform
+    from anvil_audio.models.conditioners import (
         T5Conditioner,
         CLAPTextConditioner,
     )
-    from stable_audio_tools.models.diffusion import ConditionedDiffusionModelWrapper
+    from anvil_audio.models.diffusion import ConditionedDiffusionModelWrapper
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ class DiTGeneratorAdapter(BaseGenerator):
         Returns:
             Denoised latent tensor of the same shape as *noise*.
         """
-        from stable_audio_tools.inference.sampling import sample_k, sample_rf
+        from anvil_audio.inference.sampling import sample_k, sample_rf
 
         diff_objective = self._wrapper.diffusion_objective
         cfg_scale = kwargs.pop("cfg_scale", 6.0)
@@ -288,7 +288,7 @@ class DiffusionPipeline(BasePipeline):
 
     Example::
 
-        from stable_audio_tools.core import load_pipeline
+        from anvil_audio.core import load_pipeline
         pipe = load_pipeline("stable-audio-open-1.0")
         audio = pipe.generate(
             [{"prompt": "rain on a tin roof", "seconds_start": 0, "seconds_total": 10}]
@@ -352,7 +352,7 @@ class DiffusionPipeline(BasePipeline):
         Returns:
             Float audio tensor ``[B, channels, T]`` in ``[-1, 1]``.
         """
-        from stable_audio_tools.inference.generation import generate_diffusion_cond
+        from anvil_audio.inference.generation import generate_diffusion_cond
 
         # Build effective params: defaults → per-call overrides
         params = {**self._default_params, **kwargs}
@@ -396,7 +396,7 @@ class DiffusionPipeline(BasePipeline):
         Returns ``None`` if the underlying model has no pretransform, or if
         the pretransform is not an ``AutoencoderPretransform``.
         """
-        from stable_audio_tools.models.pretransforms import AutoencoderPretransform
+        from anvil_audio.models.pretransforms import AutoencoderPretransform
 
         pt = getattr(self._model, "pretransform", None)
         if isinstance(pt, AutoencoderPretransform):

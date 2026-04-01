@@ -1,7 +1,7 @@
 import argparse
 import json
 from torch.nn.parameter import Parameter
-from stable_audio_tools.models import create_model_from_config
+from anvil_audio.models import create_model_from_config
 
 if __name__ == '__main__':
     args = argparse.ArgumentParser()
@@ -20,7 +20,7 @@ if __name__ == '__main__':
     model = create_model_from_config(model_config)
 
     if model_type == 'autoencoder':
-        from stable_audio_tools.training.autoencoders import AutoencoderTrainingWrapper
+        from anvil_audio.training.autoencoders import AutoencoderTrainingWrapper
 
         ema_copy = None
         use_ema = training_config.get("use_ema", False)
@@ -46,10 +46,10 @@ if __name__ == '__main__':
             ema_copy=ema_copy
         )
     elif model_type == 'diffusion_uncond':
-        from stable_audio_tools.training.diffusion import DiffusionUncondTrainingWrapper
+        from anvil_audio.training.diffusion import DiffusionUncondTrainingWrapper
         training_wrapper = DiffusionUncondTrainingWrapper.load_from_checkpoint(args.ckpt_path, model=model, strict=False)
     elif model_type == 'diffusion_autoencoder':
-        from stable_audio_tools.training.diffusion import DiffusionAutoencoderTrainingWrapper
+        from anvil_audio.training.diffusion import DiffusionAutoencoderTrainingWrapper
 
         ema_copy = create_model_from_config(model_config)
 
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
         training_wrapper = DiffusionAutoencoderTrainingWrapper.load_from_checkpoint(args.ckpt_path, model=model, ema_copy=ema_copy, strict=False)
     elif model_type == 'diffusion_cond':
-        from stable_audio_tools.training.diffusion import DiffusionCondTrainingWrapper
+        from anvil_audio.training.diffusion import DiffusionCondTrainingWrapper
 
         use_ema = training_config.get("use_ema", True)
 
@@ -74,10 +74,10 @@ if __name__ == '__main__':
             strict=False
         )
     elif model_type == 'diffusion_cond_inpaint':
-        from stable_audio_tools.training.diffusion import DiffusionCondInpaintTrainingWrapper
+        from anvil_audio.training.diffusion import DiffusionCondInpaintTrainingWrapper
         training_wrapper = DiffusionCondInpaintTrainingWrapper.load_from_checkpoint(args.ckpt_path, model=model, strict=False)
     elif model_type == 'diffusion_prior':
-        from stable_audio_tools.training.diffusion import DiffusionPriorTrainingWrapper
+        from anvil_audio.training.diffusion import DiffusionPriorTrainingWrapper
 
         ema_copy = create_model_from_config(model_config)
 
@@ -89,7 +89,7 @@ if __name__ == '__main__':
 
         training_wrapper = DiffusionPriorTrainingWrapper.load_from_checkpoint(args.ckpt_path, model=model, strict=False, ema_copy=ema_copy)
     elif model_type == 'lm':
-        from stable_audio_tools.training.lm import AudioLanguageModelTrainingWrapper
+        from anvil_audio.training.lm import AudioLanguageModelTrainingWrapper
 
         ema_copy = None
 

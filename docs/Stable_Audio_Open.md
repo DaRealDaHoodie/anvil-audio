@@ -15,7 +15,7 @@ along with some information about the model below.
 
 ## Build an environment
 
-To install dependencies and build an environment for this (friendly-stable-audio-tools) repository, please follow the instruction in [README](../README.md).
+To install dependencies and build an environment for this (anvil-audio) repository, please follow the instruction in [README](../README.md).
 
 ## Authentication of HuggingFace
 
@@ -42,7 +42,7 @@ In my case, the use of an environment variable `HF_TOKEN` was convenient.
 
 I extracted the model configuration of `Stable Audio Open 1.0` as with other models in the configuration directory.
 
-- [stable_audio_open_1_0.json](../stable_audio_tools/configs/model_configs/txt2audio/stable_audio_open_1_0.json)
+- [stable_audio_open_1_0.json](../anvil_audio/configs/model_configs/txt2audio/stable_audio_open_1_0.json)
 
 You can see that the main model architecture is exactly the same as **`Stable Audio 2.0`**. However, an interesting difference is that the pretrained encoder used to extract features from text prompts has changed from the CLAP text encoder to **T5 encoder** 🙄🙄.
 - Stable Audio 2.0 : CLAP text encoder
@@ -116,8 +116,8 @@ or read the actual codes in the scripts.
 As same as training or other scripts, you can execute the script with Singularity container as follows.
 
 ```bash
-CONTAINER_PATH="/path/to/sif/friendly-stable-audio-tools.sif"
-ROOT_DIR="/path/to/friendly-stable-audio-tools/"
+CONTAINER_PATH="/path/to/sif/anvil-audio.sif"
+ROOT_DIR="/path/to/anvil-audio/"
 OUTPUT_DIR="/path/to/output_dir/"
 
 COND_YAML_PATH="example/generation/generate_conditions.yaml"
@@ -147,8 +147,8 @@ This repository also supports a Gradio interface for trying out the generation w
 You can run the Gradio script using Singularity container as follows.
 
 ```bash
-CONTAINER_PATH="/path/to/sif/friendly-stable-audio-tools.sif"
-ROOT_DIR="/path/to/friendly-stable-audio-tools/"
+CONTAINER_PATH="/path/to/sif/anvil-audio.sif"
+ROOT_DIR="/path/to/anvil-audio/"
 TMP_DIR="/path/to/temporary_dir/" # e.g. 'tmp/'
 
 HF_TOKEN="hf_abcdefgh123ijk..." # set your token

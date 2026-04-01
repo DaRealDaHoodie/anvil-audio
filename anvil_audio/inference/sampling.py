@@ -4,7 +4,7 @@ import math
 import torch
 import k_diffusion as K
 
-from stable_audio_tools.utils.torch_common import print_once, exists
+from anvil_audio.utils.torch_common import print_once, exists
 
 
 def get_alphas_sigmas(t):

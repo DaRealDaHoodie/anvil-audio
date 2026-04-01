@@ -13,12 +13,12 @@ import torchaudio
 from torchaudio import transforms as T
 from accelerate import Accelerator
 
-from stable_audio_tools.models import create_model_from_config
-from stable_audio_tools.models.autoencoders import AudioAutoencoder
-from stable_audio_tools.models.utils import load_ckpt_state_dict
-from stable_audio_tools.utils.torch_common import get_world_size, get_rank, count_parameters, copy_state_dict
-from stable_audio_tools.data.dataset import get_audio_filenames
-from stable_audio_tools.data.modification import Mono, Stereo
+from anvil_audio.models import create_model_from_config
+from anvil_audio.models.autoencoders import AudioAutoencoder
+from anvil_audio.models.utils import load_ckpt_state_dict
+from anvil_audio.utils.torch_common import get_world_size, get_rank, count_parameters, copy_state_dict
+from anvil_audio.data.dataset import get_audio_filenames
+from anvil_audio.data.modification import Mono, Stereo
 
 # import os
 # import sys

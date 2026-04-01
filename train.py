@@ -5,11 +5,11 @@ import json
 import pytorch_lightning as pl
 from prefigure.prefigure import get_all_args, push_wandb_config
 
-from stable_audio_tools.data.dataset import create_dataloader_from_config
-from stable_audio_tools.models import create_model_from_config
-from stable_audio_tools.models.utils import load_ckpt_state_dict, remove_weight_norm_from_model
-from stable_audio_tools.training import create_training_wrapper_from_config, create_demo_callback_from_config, create_tqdm_callback_from_config
-from stable_audio_tools.utils.torch_common import set_seed, copy_state_dict
+from anvil_audio.data.dataset import create_dataloader_from_config
+from anvil_audio.models import create_model_from_config
+from anvil_audio.models.utils import load_ckpt_state_dict, remove_weight_norm_from_model
+from anvil_audio.training import create_training_wrapper_from_config, create_demo_callback_from_config, create_tqdm_callback_from_config
+from anvil_audio.utils.torch_common import set_seed, copy_state_dict
 
 
 class ExceptionCallback(pl.Callback):

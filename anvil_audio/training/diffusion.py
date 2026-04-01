@@ -17,7 +17,7 @@ from torch import optim
 from torch.nn import functional as F
 import wandb
 
-from stable_audio_tools.utils.audio_utils import float_to_int16_audio
+from anvil_audio.utils.audio_utils import float_to_int16_audio
 from ..inference.sampling import get_alphas_sigmas, sample, sample_discrete_euler
 from ..models.diffusion import DiffusionModelWrapper, ConditionedDiffusionModelWrapper
 from ..models.autoencoders import DiffusionAutoencoder

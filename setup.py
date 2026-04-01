@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='friendly-stable-audio-tools',
-    version='0.0.17.0',
-    url='https://github.com/yukara-ikemiya/friendly-stable-audio-tools.git',
-    author='Yukara Ikemiya and Stability AI',
-    description='Training and inference tools for generative audio models from Stability AI',
+    name='anvil-audio',
+    version='1.0.0',
+    url='https://github.com/tweaver/anvil-audio',
+    author='T. Weaver (fork of friendly-stable-audio-tools by Yukara Ikemiya and Stability AI)',
+    description='A pluggable studio tool for AI audio generation. Swap models, keep your workflow.',
     python_requires='>=3.12',
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -18,6 +18,11 @@ setup(
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
     ],
     packages=find_packages(),
+    entry_points={
+        'console_scripts': [
+            'anvil=anvil_audio.cli:main',
+        ],
+    },
     install_requires=[
         'alias-free-torch>=0.0.6',
         'auraloss>=0.4.0',

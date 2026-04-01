@@ -17,8 +17,8 @@ import numpy as np
 from pedalboard.io import AudioFile
 import webdataset as wds
 
-from stable_audio_tools.utils.audio_utils import is_silence
-from stable_audio_tools.utils.torch_common import print_once
+from anvil_audio.utils.audio_utils import is_silence
+from anvil_audio.utils.torch_common import print_once
 from .modification import Stereo, Mono, PhaseFlipper, PadCrop_Normalized_T
 
 

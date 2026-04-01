@@ -262,8 +262,8 @@ class BasePipeline(ABC):
         for free.  It is the preferred entry point for programmatic use and
         is callable without Gradio or the CLI::
 
-            from stable_audio_tools.core import load_pipeline
-            from stable_audio_tools.core.output import OutputManager
+            from anvil_audio.core import load_pipeline
+            from anvil_audio.core.output import OutputManager
 
             pipe = load_pipeline("stable-audio-open-1.0")
             manager = OutputManager(project="my-project")

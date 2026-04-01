@@ -22,8 +22,8 @@ import argparse
 
 import torch
 
-from stable_audio_tools.interface.gradio import create_ui
-from stable_audio_tools.utils.torch_common import get_best_device
+from anvil_audio.interface.gradio import create_ui
+from anvil_audio.utils.torch_common import get_best_device
 
 
 def main(args: argparse.Namespace) -> None:
@@ -60,5 +60,5 @@ if __name__ == "__main__":
     parser.add_argument("--model-half", action="store_true", help="Use float16 (half precision) inference")
     parser.add_argument("--tmp-dir", type=str, default="", help="Legacy parameter (unused; output manager handles paths)")
     parser.add_argument("--device", type=str, default="", help="Device override: cuda, mps, cpu (auto-detects if not set)")
-    parser.add_argument("--project", type=str, default="", help="Project name — outputs go to ~/stable-audio-outputs/{project}/")
+    parser.add_argument("--project", type=str, default="", help="Project name — outputs go to ~/anvil-audio-outputs/{project}/")
     main(parser.parse_args())

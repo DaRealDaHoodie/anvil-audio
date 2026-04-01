@@ -5,12 +5,12 @@ Pure library code: no dependency on the CLI, Gradio, or any ML runtime.
 Importable and callable from an external process (e.g. an MCP server)
 without launching the Gradio UI or the generate.py CLI::
 
-    from stable_audio_tools.core.output import OutputManager, GenerationMetadata
+    from anvil_audio.core.output import OutputManager, GenerationMetadata
     manager = OutputManager(project="sfx-pack-v1")
 
 Output root layout::
 
-    ~/stable-audio-outputs/
+    ~/anvil-audio-outputs/
     └── {project}/                          ← single-item files land here
         ├── 20240115_143022_rain_on_tin_roof_stable_audio_open_1_0_42.wav
         ├── 20240115_143022_rain_on_tin_roof_stable_audio_open_1_0_42.json
@@ -149,10 +149,10 @@ class OutputManager:
                   ``"default"``.  Whitespace-only values are treated as
                   ``"default"``.
         base_dir: Override the root directory.  Defaults to
-                  ``~/stable-audio-outputs``.
+                  ``~/anvil-audio-outputs``.
     """
 
-    DEFAULT_BASE: Path = Path.home() / "stable-audio-outputs"
+    DEFAULT_BASE: Path = Path.home() / "anvil-audio-outputs"
 
     def __init__(
         self,
@@ -309,7 +309,7 @@ class OutputManager:
             ``(audio_path, sidecar_path)`` — both absolute ``Path`` objects.
         """
         import torchaudio
-        from stable_audio_tools.utils.audio_utils import float_to_int16_audio
+        from anvil_audio.utils.audio_utils import float_to_int16_audio
 
         path = self.resolve_path(metadata, ext, subfolder)
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from stable_audio_tools.core.pipeline import DiffusionPipeline
+    from anvil_audio.core.pipeline import DiffusionPipeline
 
 
 def create_pipeline_from_config(
@@ -40,9 +40,9 @@ def create_pipeline_from_config(
                              a compatible variant.  Use ``create_model_from_config``
                              directly for autoencoders, LMs, and other types.
     """
-    from stable_audio_tools.core.pipeline import DiffusionPipeline
-    from stable_audio_tools.models.utils import load_ckpt_state_dict
-    from stable_audio_tools.utils.torch_common import copy_state_dict
+    from anvil_audio.core.pipeline import DiffusionPipeline
+    from anvil_audio.models.utils import load_ckpt_state_dict
+    from anvil_audio.utils.torch_common import copy_state_dict
 
     supported = {"diffusion_cond", "diffusion_cond_inpaint", "diffusion_prior"}
     model_type = model_config.get("model_type", "")

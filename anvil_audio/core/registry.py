@@ -1,5 +1,5 @@
 """
-Model registry for stable_audio_tools.
+Model registry for anvil_audio.
 
 Provides a central catalogue of named pipeline configurations.  Each entry
 maps a short name (e.g. ``"stable-audio-open-1.0"``) to everything needed to
@@ -8,7 +8,7 @@ instantiate a ready-to-run ``BasePipeline``.
 Built-in entries cover known Stability AI HuggingFace models.  Users can
 extend or override the registry via a YAML file at::
 
-    ~/.stable-audio-tools/registry.yaml
+    ~/.anvil-audio/registry.yaml
 
 YAML schema (all fields optional except ``name``)::
 
@@ -25,7 +25,7 @@ YAML schema (all fields optional except ``name``)::
 
 Usage::
 
-    from stable_audio_tools.core import registry, load_pipeline
+    from anvil_audio.core import registry, load_pipeline
 
     pipeline = load_pipeline("stable-audio-open-1.0")
     audio = pipeline.generate([{"prompt": "rain on a tin roof", "seconds_start": 0, "seconds_total": 10}])
@@ -172,12 +172,12 @@ class ModelRegistry:
             self._entries[entry.name] = entry
 
     def _load_user_registry(self) -> None:
-        """Merge entries from ``~/.stable-audio-tools/registry.yaml`` if it exists.
+        """Merge entries from ``~/.anvil-audio/registry.yaml`` if it exists.
 
         User entries override built-in entries with the same name.
         Invalid entries are skipped with a printed warning.
         """
-        registry_path = Path.home() / ".stable-audio-tools" / "registry.yaml"
+        registry_path = Path.home() / ".anvil-audio" / "registry.yaml"
         if not registry_path.exists():
             return
 
@@ -229,7 +229,7 @@ class ModelRegistry:
 
 #: Global registry instance — import this directly::
 #:
-#:     from stable_audio_tools.core import registry
+#:     from anvil_audio.core import registry
 #:     registry.register(RegistryEntry(name="my-model", ...))
 registry = ModelRegistry()
 
@@ -255,19 +255,19 @@ def load_pipeline(
     """
     # Import here to avoid circular imports at module load time
     from .pipeline import DiffusionPipeline
-    from stable_audio_tools.utils.torch_common import get_best_device
+    from anvil_audio.utils.torch_common import get_best_device
 
     entry = registry.get(name)
     _device = device or str(get_best_device())
 
     if entry.pretrained_name is not None:
-        from stable_audio_tools.models.pretrained import get_pretrained_model
+        from anvil_audio.models.pretrained import get_pretrained_model
         model, model_config = get_pretrained_model(entry.pretrained_name)
     else:
         import json
-        from stable_audio_tools.models.factory import create_model_from_config
-        from stable_audio_tools.models.utils import load_ckpt_state_dict
-        from stable_audio_tools.utils.torch_common import copy_state_dict
+        from anvil_audio.models.factory import create_model_from_config
+        from anvil_audio.models.utils import load_ckpt_state_dict
+        from anvil_audio.utils.torch_common import copy_state_dict
         with open(entry.model_config_path) as fh:
             model_config = json.load(fh)
         model = create_model_from_config(model_config)

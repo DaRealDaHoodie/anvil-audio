@@ -12,7 +12,7 @@ from einops import rearrange
 from safetensors.torch import save_file
 import wandb
 
-from stable_audio_tools.utils.audio_utils import float_to_int16_audio
+from anvil_audio.utils.audio_utils import float_to_int16_audio
 from ..models.lm import AudioLanguageModelWrapper
 from .scheduler import create_optimizer_from_config, create_scheduler_from_config
 from .viz import audio_spectrogram_image

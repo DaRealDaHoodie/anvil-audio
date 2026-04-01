@@ -1,5 +1,5 @@
 """
-stable_audio_tools.core
+anvil_audio.core
 ~~~~~~~~~~~~~~~~~~~~~~~
 Pluggable component abstraction layer for generative audio models.
 

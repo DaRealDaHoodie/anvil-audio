@@ -1,5 +1,5 @@
 """
-Gradio web interface for stable_audio_tools.
+Gradio web interface for anvil_audio.
 
 Generation is wired through ``DiffusionPipeline`` so that every call
 participates in the output manager (filenames, JSON sidecars, batch
@@ -935,7 +935,7 @@ def create_ui(
                     label="Project",
                     placeholder="default",
                     value=project,
-                    info="Output files go to ~/stable-audio-outputs/{project}/",
+                    info="Output files go to ~/anvil-audio-outputs/{project}/",
                 )
             with gr.Column(scale=3):
                 model_dropdown = gr.Dropdown(
