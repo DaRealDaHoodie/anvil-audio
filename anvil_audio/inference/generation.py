@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from .utils import prepare_audio
-from .sampling import sample_k, sample_rf
+from .sampling import sample_k, sample_rf, sample_rf_denoiser
 from anvil_audio.utils.torch_common import exists, empty_cache, get_best_device
 
 
@@ -82,6 +82,9 @@ def generate_diffusion_uncond(
             model.model, noise, init_audio, mask, steps, **sampler_kwargs, device=device, disable_tqdm=disable_tqdm)
     elif diff_objective == "rectified_flow":
         sampled = sample_rf(
+            model.model, noise, init_data=init_audio, steps=steps, **sampler_kwargs, device=device, disable_tqdm=disable_tqdm)
+    elif diff_objective == "rf_denoiser":
+        sampled = sample_rf_denoiser(
             model.model, noise, init_data=init_audio, steps=steps, **sampler_kwargs, device=device, disable_tqdm=disable_tqdm)
     else:
         raise RuntimeError(f"No such sampling mode: '{diff_objective}'")
@@ -259,6 +262,18 @@ def generate_diffusion_cond(
             model.model, noise, init_data=init_audio, steps=steps, **sampler_kwargs, **conditioning_inputs, **negative_conditioning_tensors,
             cfg_scale=cfg_scale, batch_cfg=True, rescale_cfg=True, device=device, disable_tqdm=disable_tqdm
         )
+    elif diff_objective == "rf_denoiser":
+        if "sigma_min" in sampler_kwargs:
+            del sampler_kwargs["sigma_min"]
+        if "sampler_type" in sampler_kwargs:
+            del sampler_kwargs["sampler_type"]
+
+        sampled = sample_rf_denoiser(
+            model.model, noise, init_data=init_audio, steps=steps, **sampler_kwargs, **conditioning_inputs, **negative_conditioning_tensors,
+            device=device, disable_tqdm=disable_tqdm
+        )
+    else:
+        raise RuntimeError(f"No such sampling mode: '{diff_objective}'")
 
     # v-diffusion:
     # sampled = sample(model.model, noise, steps, 0, **conditioning_tensors, embedding_scale=cfg_scale)

@@ -29,11 +29,9 @@ def t_to_alpha_sigma(t):
 def sample_discrete_euler(model, x, steps, sigma_max=1, verbose: bool = True, **extra_args):
     """Draws samples from a model given starting noise. Euler method"""
 
-    if verbose:
-        itv = 10
-        t_s = torch.cuda.Event(enable_timing=True)
-        t_e = torch.cuda.Event(enable_timing=True)
-        t_s.record()
+    import time
+    _t_start = time.monotonic() if verbose else None
+    itv = 10
 
     # Create the noise schedule
     t = torch.linspace(sigma_max, 0, steps + 1)
@@ -47,14 +45,13 @@ def sample_discrete_euler(model, x, steps, sigma_max=1, verbose: bool = True, **
 
         # we solve backwards in our formulation
         dt = t_prev - t_curr
-        x = x + dt * model(x, t_curr_tensor, **extra_args)  # .denoise(x, denoiser, t_curr_tensor, cond, uc)
+        x = x + dt * model(x, t_curr_tensor, **extra_args)
 
         if verbose and (idx + 1) % itv == 0:
-            t_e.record()
-            torch.cuda.synchronize()
-            proc_time = t_s.elapsed_time(t_e) / 1000.
+            _t_now = time.monotonic()
+            proc_time = _t_now - _t_start
             print_once(f"{idx + 1}\t / {steps}  [{itv / proc_time:.2f} iter/sec]")
-            t_s.record()
+            _t_start = _t_now
 
     # If we are on the last timestep, output the denoised image
     return x
@@ -254,22 +251,57 @@ def sample_rf(
     if sigma_max > 1:
         sigma_max = 1
 
-    # NOTE: need to check this is correct
-    denoiser = K.external.VDenoiser(model_fn)
-
     if cond_fn is not None:
-        denoiser = make_cond_model_fn(denoiser, cond_fn)
+        model_fn = make_cond_model_fn(model_fn, cond_fn)
 
     if init_data is not None:
-        # VARIATION (no inpainting)
-        # Interpolate the init data and the noise for init audio
         x = init_data * (1 - sigma_max) + noise * sigma_max
     else:
-        # SAMPLING
-        # set the initial latent to noise
         x = noise
 
-    with torch.cuda.amp.autocast():
-        # TODO: Add callback support
-        # return sample_discrete_euler(model_fn, x, steps, sigma_max, callback=wrapped_callback, **extra_args)
+    _device_type = str(device).split(":")[0] if device else "cpu"
+    autocast_ctx = (
+        torch.amp.autocast(device_type=_device_type)
+        if _device_type == "cuda"
+        else torch.inference_mode(mode=False)
+    )
+    with autocast_ctx:
         return sample_discrete_euler(model_fn, x, steps, sigma_max, verbose=not disable_tqdm, **extra_args)
+
+
+def sample_rf_denoiser(
+    model_fn,
+    noise,
+    init_data=None,
+    steps=100,
+    sigma_max=1,
+    device=None,
+    disable_tqdm: bool = False,
+    **extra_args
+):
+    """Sample from a rectified-flow model that predicts x_0 (denoised output).
+
+    Converts x_0 predictions to velocity for the discrete Euler sampler via:
+        velocity = (x_t - x_0_pred) / t
+    """
+    if sigma_max > 1:
+        sigma_max = 1
+
+    if init_data is not None:
+        x = init_data * (1 - sigma_max) + noise * sigma_max
+    else:
+        x = noise
+
+    def _velocity_fn(x, t, **kwargs):
+        x0_pred = model_fn(x, t, **kwargs)
+        t_expanded = t.view(-1, *([1] * (x.ndim - 1))).clamp(min=1e-7)
+        return (x - x0_pred) / t_expanded
+
+    _device_type = str(device).split(":")[0] if device else "cpu"
+    autocast_ctx = (
+        torch.amp.autocast(device_type=_device_type)
+        if _device_type == "cuda"
+        else torch.inference_mode(mode=False)
+    )
+    with autocast_ctx:
+        return sample_discrete_euler(_velocity_fn, x, steps, sigma_max, verbose=not disable_tqdm, **extra_args)

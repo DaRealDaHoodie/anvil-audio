@@ -161,7 +161,7 @@ class DiTGeneratorAdapter(BaseGenerator):
         Returns:
             Denoised latent tensor of the same shape as *noise*.
         """
-        from anvil_audio.inference.sampling import sample_k, sample_rf
+        from anvil_audio.inference.sampling import sample_k, sample_rf, sample_rf_denoiser
 
         diff_objective = self._wrapper.diffusion_objective
         cfg_scale = kwargs.pop("cfg_scale", 6.0)
@@ -190,6 +190,17 @@ class DiTGeneratorAdapter(BaseGenerator):
                 cfg_scale=cfg_scale,
                 batch_cfg=True,
                 rescale_cfg=True,
+                **conditioning,
+                **kwargs,
+            )
+        elif diff_objective == "rf_denoiser":
+            kwargs.pop("sigma_min", None)
+            kwargs.pop("sampler_type", None)
+            return sample_rf_denoiser(
+                self._wrapper.model,
+                noise,
+                init_data=None,
+                steps=steps,
                 **conditioning,
                 **kwargs,
             )
