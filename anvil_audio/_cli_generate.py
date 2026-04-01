@@ -309,9 +309,7 @@ def main() -> None:
     effective_sigma_min = gen_kwargs.get("sigma_min", pipeline.default_params.get("sigma_min", 0.3))
     effective_sigma_max = gen_kwargs.get("sigma_max", pipeline.default_params.get("sigma_max", 500.0))
 
-    # Effective batch window (CFG doubles the batch internally)
-    cfg = gen_kwargs.get("cfg_scale", pipeline.default_params.get("cfg_scale", 7.0))
-    batch_window = max(args.batch_size // 2, 1) if cfg != 1.0 else args.batch_size
+    batch_window = args.batch_size
 
     # Load conditions and expand by n_sample_per_cond
     conds = _load_conditions(args)
