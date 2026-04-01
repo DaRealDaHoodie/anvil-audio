@@ -367,7 +367,8 @@ class DiffusionPipeline(BasePipeline):
 
         # Build effective params: defaults → per-call overrides
         params = {**self._default_params, **kwargs}
-        effective_steps = steps if steps is not None else params.pop("steps")
+        params_steps = params.pop("steps", None)
+        effective_steps = steps if steps is not None else params_steps
 
         return generate_diffusion_cond(
             self._model,
