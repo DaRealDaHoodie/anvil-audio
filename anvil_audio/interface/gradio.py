@@ -8,11 +8,14 @@ CLI via ``run_gradio.py``.
 
 Module-level state
 ------------------
-``_pipeline``      : the loaded ``DiffusionPipeline`` (set by ``load_model``).
-``_model_name``    : registry name or ``"custom"`` (used in metadata).
-``_default_project``: project name set at launch via ``--project`` CLI arg.
-``sample_rate``    : updated whenever a new model is loaded.
-``sample_size``    : updated whenever a new model is loaded.
+``_pipeline``            : the loaded ``DiffusionPipeline`` (set by ``load_model``).
+``_model_name``          : registry name or ``"custom"`` (used in metadata).
+``_default_project``     : project name set at launch via ``--project`` CLI arg.
+``_pipeline_type``       : ``"diffusion"`` or ``"acestep"`` — updated on load.
+``_last_generated_path`` : absolute path of the most recently saved audio file;
+                           used by the Edit tab's "Load Last Generation" button.
+``sample_rate``          : updated whenever a new model is loaded.
+``sample_size``          : updated whenever a new model is loaded.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ _pipeline: DiffusionPipeline | None = None
 _model_name: str = ""
 _default_project: str = ""
 _pipeline_type: str = "diffusion"   # "diffusion" | "acestep"
+_last_generated_path: str = ""      # path of the most recently generated file
 sample_rate: int = 32000
 sample_size: int = 1920000
 
@@ -611,8 +615,9 @@ def generate_unified(
     project: str,
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """Route to the correct generation backend based on the currently loaded pipeline type."""
+    global _last_generated_path
     if _pipeline_type == "acestep":
-        return generate_acestep(
+        result = generate_acestep(
             prompt=prompt,
             lyrics=lyrics,
             seconds_total=seconds_total,
@@ -621,24 +626,27 @@ def generate_unified(
             seed=seed,
             project=project,
         )
-    return generate_cond(
-        prompt=prompt,
-        negative_prompt=negative_prompt or None,
-        seconds_start=seconds_start,
-        seconds_total=seconds_total,
-        cfg_scale=cfg_scale,
-        steps=steps,
-        preview_every=preview_every,
-        seed=seed,
-        sampler_type=sampler_type,
-        sigma_min=sigma_min,
-        sigma_max=sigma_max,
-        cfg_rescale=cfg_rescale,
-        use_init=use_init,
-        init_audio=init_audio,
-        init_noise_level=init_noise_level,
-        project=project,
-    )
+    else:
+        result = generate_cond(
+            prompt=prompt,
+            negative_prompt=negative_prompt or None,
+            seconds_start=seconds_start,
+            seconds_total=seconds_total,
+            cfg_scale=cfg_scale,
+            steps=steps,
+            preview_every=preview_every,
+            seed=seed,
+            sampler_type=sampler_type,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            cfg_rescale=cfg_rescale,
+            use_init=use_init,
+            init_audio=init_audio,
+            init_noise_level=init_noise_level,
+            project=project,
+        )
+    _last_generated_path = result[0]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1540,38 +1548,48 @@ def create_ui(
 
         gr.Markdown("---")
 
-        # ---- Model-type-specific UI ----
+        # ---- Model-type-specific UI + Edit tab ----
         _btn_inputs = [model_dropdown, project_textbox, model_half_checkbox, device_textbox]
 
-        if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "acestep"}:
-            # Unified panel handles both diffusion and ACE-Step with show/hide
-            _mc = loaded_config if model_type != "acestep" else None
-            _init_params = _entry.resolved_params() if _entry else {}
-            param_comps = create_unified_txt2music_ui(
-                project_textbox,
-                initial_model_type=model_type,
-                initial_params=_init_params,
-                model_config=_mc,
-            )
-            load_model_btn.click(
-                fn=_model_load_ui_unified,
-                inputs=_btn_inputs,
-                outputs=[model_status, *param_comps],
-            )
-        else:
-            # Non-text2music model types keep their existing dedicated UIs
-            if model_type == "diffusion_uncond":
-                create_diffusion_uncond_ui(loaded_config, project_textbox)
-            elif model_type in {"autoencoder", "diffusion_autoencoder"}:
-                create_autoencoder_ui(loaded_config, project_textbox)
-            elif model_type == "diffusion_prior":
-                create_diffusion_prior_ui(loaded_config, project_textbox)
-            elif model_type == "lm":
-                create_lm_ui(loaded_config, project_textbox)
-            load_model_btn.click(
-                fn=_model_load_ui,
-                inputs=_btn_inputs,
-                outputs=[model_status],
-            )
+        from .edit_tab import create_edit_tab
+
+        with gr.Tabs():
+            with gr.Tab("Generate"):
+                if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "acestep"}:
+                    # Unified panel handles both diffusion and ACE-Step with show/hide
+                    _mc = loaded_config if model_type != "acestep" else None
+                    _init_params = _entry.resolved_params() if _entry else {}
+                    param_comps = create_unified_txt2music_ui(
+                        project_textbox,
+                        initial_model_type=model_type,
+                        initial_params=_init_params,
+                        model_config=_mc,
+                    )
+                    load_model_btn.click(
+                        fn=_model_load_ui_unified,
+                        inputs=_btn_inputs,
+                        outputs=[model_status, *param_comps],
+                    )
+                else:
+                    # Non-text2music model types keep their existing dedicated UIs
+                    if model_type == "diffusion_uncond":
+                        create_diffusion_uncond_ui(loaded_config, project_textbox)
+                    elif model_type in {"autoencoder", "diffusion_autoencoder"}:
+                        create_autoencoder_ui(loaded_config, project_textbox)
+                    elif model_type == "diffusion_prior":
+                        create_diffusion_prior_ui(loaded_config, project_textbox)
+                    elif model_type == "lm":
+                        create_lm_ui(loaded_config, project_textbox)
+                    load_model_btn.click(
+                        fn=_model_load_ui,
+                        inputs=_btn_inputs,
+                        outputs=[model_status],
+                    )
+
+            with gr.Tab("Edit"):
+                create_edit_tab(
+                    project_component=project_textbox,
+                    last_path_getter=lambda: _last_generated_path,
+                )
 
     return interface
