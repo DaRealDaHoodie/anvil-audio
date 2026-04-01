@@ -733,8 +733,8 @@ def create_sampling_ui(
             if inpainting:
                 with gr.Accordion("Inpainting", open=False):
                     sigma_max_slider.maximum = 1000
-                    init_audio_checkbox = gr.Checkbox(label="Do inpainting", info="Enable to regenerate only a portion of an existing audio file using the mask settings below.")
-                    init_audio_input = gr.Audio(label="Init audio", info="The audio file to use as a starting point for inpainting or variation.")
+                    init_audio_checkbox = gr.Checkbox(label="Do inpainting — regenerate only a portion of an existing file using the mask settings below")
+                    init_audio_input = gr.Audio(label="Init audio — the file to use as a starting point for inpainting or variation")
                     init_noise_level_slider = gr.Slider(
                         minimum=0.1, maximum=100.0, step=0.1, value=80,
                         label="Init audio noise level", visible=False,
@@ -763,8 +763,8 @@ def create_sampling_ui(
                     ]
             else:
                 with gr.Accordion("Init audio", open=False):
-                    init_audio_checkbox = gr.Checkbox(label="Use init audio", info="Upload audio to guide the generation — the model will create a variation of it rather than from scratch.")
-                    init_audio_input = gr.Audio(label="Init audio", info="The reference audio file for variation. Higher init noise level = more deviation from this file.")
+                    init_audio_checkbox = gr.Checkbox(label="Use init audio — upload audio to guide the generation, creating a variation rather than from scratch")
+                    init_audio_input = gr.Audio(label="Init audio — reference file for variation (higher init noise level = more deviation from this file)")
                     init_noise_level_slider = gr.Slider(
                         minimum=0.1, maximum=100.0, step=0.01, value=0.1, label="Init noise level",
                         info="How much noise to add to the init audio before regenerating. Higher = more variation from the original.",
@@ -958,7 +958,7 @@ def create_ui(
                     label="Registered model",
                     info="Choose a registered model by name. Click Load to switch without restarting. Add your own in ~/.anvil-audio/registry.yaml.",
                 )
-                model_half_checkbox = gr.Checkbox(label="Half precision (fp16)", value=model_half, info="Uses float16 instead of float32 — cuts memory in half with minimal quality loss. Recommended on GPUs.")
+                model_half_checkbox = gr.Checkbox(label="Half precision (fp16) — cuts memory in half with minimal quality loss, recommended on GPUs", value=model_half)
             with gr.Column(scale=2):
                 device_textbox = gr.Textbox(
                     label="Device",
