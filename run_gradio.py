@@ -46,9 +46,12 @@ def main(args: argparse.Namespace) -> None:
         project=args.project,
     )
     interface.queue()
+    from pathlib import Path
+    output_root = str(Path.home() / "anvil-audio-outputs")
     interface.launch(
         share=args.share,
         auth=(args.username, args.password) if args.username is not None else None,
+        allowed_paths=[output_root],
     )
 
 
