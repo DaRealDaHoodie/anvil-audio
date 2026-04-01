@@ -378,10 +378,9 @@ def create_edit_tab(
     with gr.Row():
         with gr.Column(scale=5):
             audio_input = gr.Audio(
-                label="Source audio",
+                label="Source audio — upload a file or click 'Load Last Generation'",
                 type="numpy",
                 interactive=True,
-                info="Upload an audio file to edit, or click 'Load Last Generation' to pull in the most recently generated file.",
             )
         with gr.Column(scale=1):
             load_last_btn = gr.Button("Load Last Generation", variant="secondary")
@@ -506,9 +505,8 @@ def create_edit_tab(
 
         with gr.Column():
             preview_audio = gr.Audio(
-                label="Preview",
+                label="Preview — click Preview to hear the result before exporting",
                 interactive=False,
-                info="Click Preview to hear the result before exporting.",
             )
             with gr.Row():
                 preview_btn = gr.Button("Preview", variant="primary")
