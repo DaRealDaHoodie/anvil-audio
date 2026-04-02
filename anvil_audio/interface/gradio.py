@@ -1318,6 +1318,76 @@ def create_lm_ui(model_config: dict[str, Any], project_component: Any) -> Any:
     return ui
 
 
+def _list_recent_sidecars(project: str) -> list[tuple[str, str]]:
+    """Return (stem_name, path_str) tuples for the 10 most recent JSON sidecars."""
+    output_dir = Path.home() / "anvil-audio-outputs" / (project or "default")
+    if not output_dir.exists():
+        return []
+    sidecars = [
+        p for p in output_dir.rglob("*.json")
+        if p.name != "batch_manifest.json"
+    ]
+    sidecars.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return [(p.stem, str(p)) for p in sidecars[:10]]
+
+
+def _apply_preset(file_path: str | None, project: str) -> tuple:
+    """Parse a sidecar JSON and return gr.update() values for all preset fields."""
+    import gradio as gr
+
+    _no_op = gr.update()
+    _no_ops = (_no_op,) * 11
+
+    if not file_path:
+        return _no_ops
+
+    try:
+        with open(file_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        return (
+            _no_op, _no_op, _no_op, _no_op,
+            _no_op, _no_op, _no_op, _no_op, _no_op, _no_op,
+            gr.update(value=f"⚠ Could not read preset: {exc}"),
+        )
+
+    prompt = data.get("prompt", "")
+    negative_prompt = data.get("negative_prompt", "")
+    seed = data.get("seed", -1)
+    steps = data.get("steps", 100)
+    cfg_scale = data.get("cfg_scale", 7.0)
+    sampler_type = data.get("sampler_type", "dpmpp-3m-sde")
+    sigma_min = data.get("sigma_min", 0.03)
+    sigma_max = data.get("sigma_max", 500.0)
+    lyrics = data.get("extra", {}).get("lyrics", "")
+
+    raw_seconds_total = data.get("seconds_total", 0.0)
+    seconds_total = raw_seconds_total if raw_seconds_total > 0 else data.get("duration_seconds", 30)
+
+    preset_model = data.get("model_name", "")
+    if preset_model and preset_model != _model_name:
+        if registry.get_model(preset_model) is not None:
+            status = f"ℹ This preset was made with **{preset_model}** — switch models to match."
+        else:
+            status = f"ℹ This preset was made with **{preset_model}**."
+    else:
+        status = ""
+
+    return (
+        gr.update(value=prompt),
+        gr.update(value=lyrics),
+        gr.update(value=negative_prompt),
+        gr.update(value=seed),
+        gr.update(value=seconds_total),
+        gr.update(value=steps),
+        gr.update(value=cfg_scale),
+        gr.update(value=sampler_type),
+        gr.update(value=sigma_min),
+        gr.update(value=sigma_max),
+        gr.update(value=status),
+    )
+
+
 def create_unified_txt2music_ui(
     project_component: Any,
     initial_model_type: str = "diffusion_cond",
@@ -1396,6 +1466,25 @@ def create_unified_txt2music_ui(
                     info="Describe what you don't want in the output. Leave blank to skip.",
                 )
         generate_button = gr.Button("Generate", variant="primary", scale=1)
+
+    with gr.Row():
+        preset_file = gr.File(
+            label="Load Preset (.json sidecar)",
+            file_types=[".json"],
+            type="filepath",
+            scale=2,
+            min_width=180,
+        )
+        with gr.Column(scale=3):
+            preset_recent = gr.Dropdown(
+                choices=_list_recent_sidecars(_default_project or "default"),
+                label="Load Recent",
+                value=None,
+                interactive=True,
+                info="10 most recent generations from the current project.",
+            )
+        preset_refresh_btn = gr.Button("↻", scale=0, min_width=48)
+        preset_status = gr.Markdown("", scale=4)
 
     with gr.Row(equal_height=False):
         with gr.Column():
@@ -1498,6 +1587,31 @@ def create_unified_txt2music_ui(
         ],
         outputs=[audio_output, audio_spectrogram_output, metadata_output],
         api_name="generate",
+    )
+
+    _preset_outputs = [
+        prompt, lyrics, negative_prompt, seed_input,
+        seconds_total_slider, steps_slider, cfg_scale_slider,
+        sampler_type_dropdown, sigma_min_slider, sigma_max_slider,
+        preset_status,
+    ]
+
+    preset_file.change(
+        fn=_apply_preset,
+        inputs=[preset_file, project_component],
+        outputs=_preset_outputs,
+    )
+    preset_recent.change(
+        fn=_apply_preset,
+        inputs=[preset_recent, project_component],
+        outputs=_preset_outputs,
+    )
+    preset_refresh_btn.click(
+        fn=lambda proj: gr.update(
+            choices=_list_recent_sidecars(proj or "default"), value=None
+        ),
+        inputs=[project_component],
+        outputs=[preset_recent],
     )
 
     return (
