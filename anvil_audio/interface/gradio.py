@@ -258,7 +258,8 @@ def generate_cond(
     """
     if not prompt or not prompt.strip():
         import gradio as gr
-        raise gr.Error("Please enter a prompt before generating.")
+        gr.Warning("Please enter a prompt before generating.")
+        return None, [], None  # type: ignore[return-value]
 
     pipeline = _get_pipeline()
     empty_cache()
@@ -622,7 +623,8 @@ def generate_unified(
     global _last_generated_path
     if not prompt or not prompt.strip():
         import gradio as gr
-        raise gr.Error("Please enter a prompt before generating.")
+        gr.Warning("Please enter a prompt before generating.")
+        return None, [], None  # type: ignore[return-value]
     if _pipeline_type == "acestep":
         result = generate_acestep(
             prompt=prompt,
