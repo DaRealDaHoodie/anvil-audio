@@ -7,8 +7,9 @@ Anvil Audio is a refactored and extended fork of
 It turns a single-model inference codebase into a clean, swappable-component platform where
 models, conditioners, and compressors are first-class abstractions.
 
-Supports **Stable Audio** diffusion models and **ACE-Step** music-generation models through
-a unified registry, CLI, and Gradio UI.
+Supports **Stable Audio** diffusion models (Stability AI) and
+**[ACE-Step](https://github.com/ace-step/ACE-Step)** music-generation models (ACE Studio /
+StepFun) through a unified registry, CLI, and Gradio UI.
 
 ---
 
@@ -551,7 +552,7 @@ Build a Docker image and optionally convert to Singularity for HPC clusters:
 
 ```bash
 NAME=anvil-audio
-docker build -t ${NAME} -f ./container/friendly-stable-audio-tools.Dockerfile .
+docker build -t ${NAME} -f ./container/anvil-audio.Dockerfile .
 
 # Convert to Singularity
 singularity build anvil-audio.sif docker-daemon://anvil-audio
@@ -559,17 +560,9 @@ singularity build anvil-audio.sif docker-daemon://anvil-audio
 
 ---
 
-## Todo
+## Backlog
 
-- [x] Pluggable pipeline architecture (BasePipeline, BaseGenerator, etc.)
-- [x] Named model registry with user-extensible YAML
-- [x] Output manager (collision-free filenames, JSON sidecars, project folders)
-- [x] `anvil generate` CLI with multi-GPU, batch YAML, seed control
-- [x] Gradio UI with model hot-reload and live metadata
-- [x] ACE-Step v1.5 integration (turbo + SFT, lyrics support, Gradio UI)
-- [ ] Post-processing pipeline (EQ, normalize, fade)
 - [ ] PyPI package (`pip install anvil-audio`)
-- [x] MCP server integration
 - [ ] Add more audio augmentations
 - [ ] Add troubleshooting section
 - [ ] Add contribution guidelines
