@@ -36,6 +36,7 @@ from mcp.server.fastmcp import FastMCP
 from anvil_audio.core.registry import registry
 from anvil_audio.core.output import GenerationMetadata, OutputManager
 from anvil_audio.utils.audio_utils import float_to_int16_audio
+from anvil_audio.utils.stdio_guard import stdout_to_stderr
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,11 @@ def _get_pipeline(model_name: str) -> Any:
     if model_name not in _pipeline_cache:
         _log(f"Loading model: {model_name}")
         from anvil_audio.core.registry import load_pipeline
-        _pipeline_cache[model_name] = load_pipeline(model_name)
+        # load_pipeline triggers model weight downloads and prints progress
+        # messages (HF hub, tqdm, "Loading VAE...", etc.) to stdout.
+        # Redirect to stderr — stdout is reserved for JSON-RPC.
+        with stdout_to_stderr():
+            _pipeline_cache[model_name] = load_pipeline(model_name)
         _log(f"Model ready: {model_name}")
     return _pipeline_cache[model_name]
 
@@ -188,13 +193,15 @@ def _run_generate(
         sigma_max = params.get("sigma_max", 500.0)
         gen_kwargs.update(sampler_type=sampler, sigma_min=sigma_min, sigma_max=sigma_max)
 
-    result = pipeline.generate(
-        conditioning,
-        steps=effective_steps,
-        seed=effective_seed,
-        disable_tqdm=True,
-        **gen_kwargs,
-    )  # [B, C, T]
+    # Samplers may print progress to stdout; redirect so MCP stdio is clean.
+    with stdout_to_stderr():
+        result = pipeline.generate(
+            conditioning,
+            steps=effective_steps,
+            seed=effective_seed,
+            disable_tqdm=True,
+            **gen_kwargs,
+        )  # [B, C, T]
 
     audio = result[0]  # [C, T]
     sr = pipeline.sample_rate

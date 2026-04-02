@@ -75,6 +75,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from anvil_audio.core.interfaces import BasePipeline
+from anvil_audio.utils.stdio_guard import stdout_to_stderr
 
 # Files that must exist in a converted weights directory.
 _REQUIRED_FILES = (
@@ -120,14 +121,15 @@ def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
         # Path given but incomplete — warn and fall through to auto-convert.
         print(
             f"[mlx] weights_dir={weights_dir!r} is missing required files; "
-            "falling back to auto-convert cache."
+            "falling back to auto-convert cache.",
+            file=sys.stderr,
         )
 
     # 2. Check Anvil's local cache.
     slug = repo_id.split("/")[-1]   # "stable-audio-open-small"
     cache_path = _MLX_CACHE_ROOT / slug
     if cache_path.is_dir() and all((cache_path / f).exists() for f in _REQUIRED_FILES):
-        print(f"[mlx] Using cached weights at {cache_path}")
+        print(f"[mlx] Using cached weights at {cache_path}", file=sys.stderr)
         return cache_path
 
     # 3. Auto-convert: download from HF and convert to MLX safetensors.
@@ -144,10 +146,14 @@ def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
         f"[mlx] First-run weight conversion for {repo_id}\n"
         f"[mlx] Downloading from HuggingFace and converting to MLX format...\n"
         f"[mlx] This takes a few minutes and ~2 GB of disk space.\n"
-        f"[mlx] Output: {cache_path}"
+        f"[mlx] Output: {cache_path}",
+        file=sys.stderr,
     )
     try:
-        convert_stable_audio(repo_id=repo_id, output_dir=str(cache_path))
+        # convert_stable_audio prints progress to stdout — redirect to stderr
+        # so MCP stdio is not corrupted.
+        with stdout_to_stderr():
+            convert_stable_audio(repo_id=repo_id, output_dir=str(cache_path))
     except Exception as exc:
         raise RuntimeError(
             f"MLX weight conversion failed for {repo_id!r}.\n"
@@ -239,13 +245,17 @@ class MLXDiffusionPipeline(BasePipeline):
 
         print(
             f"->->-> Loading MLX Stable Audio  "
-            f"repo={repo_id!r}  weights={resolved_weights}"
+            f"repo={repo_id!r}  weights={resolved_weights}",
+            file=sys.stderr,
         )
-        self._pipe: Any = StableAudioPipeline.from_pretrained(
-            weights_dir=str(resolved_weights),
-            repo_id=repo_id,
-        )
-        print("->->-> MLX Stable Audio ready")
+        # from_pretrained prints "Loading VAE/DiT/T5/conditioners..." to stdout;
+        # redirect so MCP stdio is not corrupted.
+        with stdout_to_stderr():
+            self._pipe: Any = StableAudioPipeline.from_pretrained(
+                weights_dir=str(resolved_weights),
+                repo_id=repo_id,
+            )
+        print("->->-> MLX Stable Audio ready", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # BasePipeline abstract property implementations
@@ -333,16 +343,19 @@ class MLXDiffusionPipeline(BasePipeline):
             item_seed: int | None = None if seed == -1 else int(seed) + i
 
             # mx.array (1, C, T) in [-1, 1]
-            audio_mx: Any = self._pipe.generate(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                seconds_total=seconds_total,
-                steps=int(effective_steps),
-                cfg_scale=effective_cfg,
-                sigma_max=effective_sigma_max,
-                seed=item_seed,
-                sampler=effective_sampler,
-            )
+            # generate() prints "Encoding conditioning...", "Sampling...",
+            # "Decoding latents..." — redirect to stderr for MCP safety.
+            with stdout_to_stderr():
+                audio_mx: Any = self._pipe.generate(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    seconds_total=seconds_total,
+                    steps=int(effective_steps),
+                    cfg_scale=effective_cfg,
+                    sigma_max=effective_sigma_max,
+                    seed=item_seed,
+                    sampler=effective_sampler,
+                )
 
             # Materialise the MLX lazy graph before converting to NumPy.
             mx.eval(audio_mx)

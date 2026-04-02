@@ -46,6 +46,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from anvil_audio.core.interfaces import BasePipeline
+from anvil_audio.utils.stdio_guard import stdout_to_stderr
 
 
 class ACEStepPipeline(BasePipeline):
@@ -121,14 +122,18 @@ class ACEStepPipeline(BasePipeline):
         print(
             f"->->-> Initialising ACE-Step  "
             f"config={config_path!r}  device={device!r}  "
-            f"offload={offload_to_cpu}"
+            f"offload={offload_to_cpu}",
+            file=sys.stderr,
         )
-        status, success = self._handler.initialize_service(
-            project_root=self._project_root,
-            config_path=config_path,
-            device=device,
-            offload_to_cpu=offload_to_cpu,
-        )
+        # initialize_service loads model weights and may print to stdout;
+        # redirect so MCP stdio is not corrupted.
+        with stdout_to_stderr():
+            status, success = self._handler.initialize_service(
+                project_root=self._project_root,
+                config_path=config_path,
+                device=device,
+                offload_to_cpu=offload_to_cpu,
+            )
         if not success:
             raise RuntimeError(
                 f"ACE-Step model initialisation failed.\n"
@@ -137,7 +142,7 @@ class ACEStepPipeline(BasePipeline):
                 f"  device       : {device!r}\n"
                 f"  Status       : {status}"
             )
-        print(f"->->-> ACE-Step ready  {status}")
+        print(f"->->-> ACE-Step ready  {status}", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # BasePipeline abstract property implementations
@@ -216,17 +221,20 @@ class ACEStepPipeline(BasePipeline):
                 else None
             )
 
-            result = self._handler.generate_music(
-                captions=tags,
-                lyrics=lyrics,
-                inference_steps=int(effective_steps),
-                guidance_scale=effective_cfg,
-                seed=seed,
-                use_random_seed=use_random_seed,
-                audio_duration=duration,
-                infer_method=effective_method,
-                batch_size=1,
-            )
+            # generate_music may print progress to stdout; redirect so MCP
+            # stdio is not corrupted.
+            with stdout_to_stderr():
+                result = self._handler.generate_music(
+                    captions=tags,
+                    lyrics=lyrics,
+                    inference_steps=int(effective_steps),
+                    guidance_scale=effective_cfg,
+                    seed=seed,
+                    use_random_seed=use_random_seed,
+                    audio_duration=duration,
+                    infer_method=effective_method,
+                    batch_size=1,
+                )
 
             if not result.get("success", False):
                 raise RuntimeError(
