@@ -33,7 +33,9 @@ Usage::
 
 from __future__ import annotations
 
+import importlib.util
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -81,9 +83,16 @@ class RegistryEntry:
         default_params:     Generation parameters merged over global defaults.
                             Recognised keys: steps, cfg_scale, sampler_type,
                             sigma_min, sigma_max.
-        pipeline_type:      ``"diffusion"`` (default) or ``"acestep"``.
+        pipeline_type:      ``"diffusion"`` (default), ``"acestep"``, or
+                            ``"mlx_diffusion"`` (Apple Silicon only).
         acestep_project_root: Path to the ACE-Step repository root (required
                             when ``pipeline_type == "acestep"``).
+        mlx_weights_dir:    Path to a local dir with converted safetensors
+                            **or** a short key from mlx-audiogen's built-in
+                            model registry (e.g. ``"stable-audio"``,
+                            ``"stable-audio-1.0"``).  ``None`` lets
+                            mlx-audiogen auto-download the default model.
+                            Only used when ``pipeline_type == "mlx_diffusion"``.
         max_duration:       Maximum allowed generation duration in seconds.
                             For diffusion models this is ``sample_size /
                             sample_rate`` from the model config; set it
@@ -102,6 +111,7 @@ class RegistryEntry:
     default_params: dict[str, Any] = field(default_factory=dict)
     pipeline_type: str = "diffusion"
     acestep_project_root: str | None = None
+    mlx_weights_dir: str | None = None
     max_duration: float | None = None
 
     def resolved_params(self) -> dict[str, Any]:
@@ -115,6 +125,15 @@ class RegistryEntry:
                 "sigma_max": 0.0,
             }
             return {**_acestep_defaults, **self.default_params}
+        if self.pipeline_type == "mlx_diffusion":
+            _mlx_defaults: dict[str, Any] = {
+                "steps": 100,
+                "cfg_scale": 7.0,
+                "sampler_type": "euler",
+                "sigma_min": 0.0,
+                "sigma_max": 1.0,
+            }
+            return {**_mlx_defaults, **self.default_params}
         return {**_DEFAULT_PARAMS, **self.default_params}
 
     def validate(self) -> None:
@@ -124,6 +143,13 @@ class RegistryEntry:
                 raise ValueError(
                     f"ACE-Step registry entry '{self.name}' must have "
                     "'acestep_project_root' set to the ACE-Step repo path."
+                )
+            return
+        if self.pipeline_type == "mlx_diffusion":
+            if self.pretrained_name is None:
+                raise ValueError(
+                    f"MLX registry entry '{self.name}' must have 'pretrained_name' "
+                    "set to the HuggingFace repo ID (used for tokenizer download)."
                 )
             return
         has_hf = self.pretrained_name is not None
@@ -266,6 +292,46 @@ class ModelRegistry:
                 ),
             ]
 
+        # MLX-accelerated Stable Audio entries (Apple Silicon only).
+        # Added when running on macOS arm64 with mlx-audiogen installed.
+        # mlx-audiogen ships pre-converted weights on HuggingFace so no local
+        # weight conversion is required; they are auto-downloaded on first use.
+        _mlx_available = (
+            sys.platform == "darwin"
+            and importlib.util.find_spec("mlx_audiogen") is not None
+        )
+        if _mlx_available:
+            builtin += [
+                RegistryEntry(
+                    name="stable-audio-open-small-mlx",
+                    pipeline_type="mlx_diffusion",
+                    pretrained_name="stabilityai/stable-audio-open-small",
+                    mlx_weights_dir="stable-audio",
+                    max_duration=11.0,
+                    default_params={
+                        "steps": 25,
+                        "cfg_scale": 1.0,
+                        "sampler_type": "euler",
+                        "sigma_min": 0.0,
+                        "sigma_max": 1.0,
+                    },
+                ),
+                RegistryEntry(
+                    name="stable-audio-open-1.0-mlx",
+                    pipeline_type="mlx_diffusion",
+                    pretrained_name="stabilityai/stable-audio-open-1.0",
+                    mlx_weights_dir="stable-audio-1.0",
+                    max_duration=47.0,
+                    default_params={
+                        "steps": 100,
+                        "cfg_scale": 7.0,
+                        "sampler_type": "euler",
+                        "sigma_min": 0.0,
+                        "sigma_max": 1.0,
+                    },
+                ),
+            ]
+
         for entry in builtin:
             self._entries[entry.name] = entry
 
@@ -317,6 +383,7 @@ class ModelRegistry:
                     default_params=item.get("default_params") or {},
                     pipeline_type=item.get("pipeline_type", "diffusion"),
                     acestep_project_root=item.get("acestep_project_root"),
+                    mlx_weights_dir=item.get("mlx_weights_dir"),
                     max_duration=float(raw_max) if raw_max is not None else None,
                 )
                 entry.validate()
@@ -362,6 +429,18 @@ def load_pipeline(
 
     entry = registry.get(name)
     _device = device or str(get_best_device())
+
+    # ---------------------------------------------------------------
+    # MLX diffusion pipeline (Apple Silicon + mlx-audiogen)
+    # ---------------------------------------------------------------
+    if entry.pipeline_type == "mlx_diffusion":
+        from anvil_audio.pipelines.mlx_diffusion import MLXDiffusionPipeline
+
+        return MLXDiffusionPipeline(
+            repo_id=entry.pretrained_name,  # type: ignore[arg-type]
+            weights_dir=entry.mlx_weights_dir,
+            default_params=entry.resolved_params(),
+        )
 
     # ---------------------------------------------------------------
     # ACE-Step pipeline

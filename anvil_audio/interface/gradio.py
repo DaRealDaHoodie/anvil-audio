@@ -12,6 +12,8 @@ Module-level state
 ``_model_name``          : registry name or ``"custom"`` (used in metadata).
 ``_default_project``     : project name set at launch via ``--project`` CLI arg.
 ``_pipeline_type``       : ``"diffusion"`` or ``"acestep"`` — updated on load.
+                           MLX Stable Audio models set this to ``"diffusion"``
+                           since they expose the same UI surface as PyTorch ones.
 ``_last_generated_path`` : absolute path of the most recently saved audio file;
                            used by the Edit tab's "Load Last Generation" button.
 ``sample_rate``          : updated whenever a new model is loaded.
@@ -49,7 +51,7 @@ from ..utils.torch_common import copy_state_dict, empty_cache, exists, get_best_
 _pipeline: DiffusionPipeline | None = None
 _model_name: str = ""
 _default_project: str = ""
-_pipeline_type: str = "diffusion"   # "diffusion" | "acestep"
+_pipeline_type: str = "diffusion"   # "diffusion" | "acestep"  (mlx_diffusion → "diffusion")
 _last_generated_path: str = ""      # path of the most recently generated file
 sample_rate: int = 32000
 sample_size: int = 1920000
@@ -178,6 +180,32 @@ def load_acestep_model(
     sample_size = _pipeline.sample_size
     _default_project = project
     _pipeline_type = "acestep"
+
+
+def load_mlx_model(
+    entry: Any,
+    project: str = "",
+) -> None:
+    """Load an MLX Stable Audio pipeline from a registry entry into module-level state.
+
+    Args:
+        entry:   A ``RegistryEntry`` with ``pipeline_type == "mlx_diffusion"``.
+        project: Default project name for output routing.
+    """
+    global _pipeline, _model_name, _default_project, sample_rate, sample_size, _pipeline_type
+
+    from anvil_audio.pipelines.mlx_diffusion import MLXDiffusionPipeline
+
+    _pipeline = MLXDiffusionPipeline(  # type: ignore[assignment]
+        repo_id=entry.pretrained_name,
+        weights_dir=entry.mlx_weights_dir,
+        default_params=entry.resolved_params(),
+    )
+    _model_name = entry.name
+    sample_rate = _pipeline.sample_rate
+    sample_size = _pipeline.sample_size
+    _default_project = project
+    _pipeline_type = "diffusion"   # MLX Stable Audio behaves like diffusion in the UI
 
 
 class _RawModelShim:
@@ -787,6 +815,11 @@ def _model_load_ui(
         if entry is not None and getattr(entry, "pipeline_type", "diffusion") == "acestep":
             load_acestep_model(entry=entry, device=device, project=project)
             return f"Loaded ACE-Step: {model_name} on {device}"
+
+        # MLX Stable Audio models (Apple Silicon only).
+        if entry is not None and getattr(entry, "pipeline_type", "diffusion") == "mlx_diffusion":
+            load_mlx_model(entry=entry, project=project)
+            return f"Loaded MLX: {model_name} (Metal GPU)"
 
         # Diffusion models: resolve registry short-name → HuggingFace pretrained_name.
         # If the name isn't in the registry, treat it as a raw HF repo ID.

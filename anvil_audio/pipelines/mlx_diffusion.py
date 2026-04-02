@@ -1,0 +1,285 @@
+"""
+MLXDiffusionPipeline — BasePipeline adapter for mlx-audiogen's Stable Audio Open.
+
+mlx-audiogen (``pip install mlx-audiogen``) ports Stable Audio Open's DiT,
+VAE, and T5 conditioner to Apple MLX, running entirely on the Metal GPU with
+no PyTorch involvement during inference.
+
+This module wraps ``StableAudioPipeline`` from mlx-audiogen behind Anvil's
+``BasePipeline`` interface so that MLX-accelerated Stable Audio models
+integrate with the registry, CLI batch generation, ``OutputManager``,
+Gradio UI, and MCP server without any special-casing in those layers.
+
+Audio I/O
+---------
+mlx-audiogen returns an ``mx.array`` of shape ``(1, channels, samples)`` in
+``[-1, 1]`` float32 at 44 100 Hz.  This adapter materialises the MLX lazy
+graph, copies the array to a NumPy buffer, and wraps it as a PyTorch tensor
+``[B, channels, samples]`` so the rest of Anvil never sees an MLX type.
+
+Vocabulary mapping
+------------------
+Anvil conditioning key  →  mlx-audiogen ``generate()`` parameter
+``prompt``              →  ``prompt``
+``negative_prompt``     →  ``negative_prompt``
+``seconds_total``       →  ``seconds_total``
+``steps``               →  ``steps``
+``cfg_scale``           →  ``cfg_scale``
+``seed``                →  ``seed`` (``None`` for random)
+``sampler_type``        →  ``sampler`` (mapped: any non-euler/rk4 → ``"euler"``)
+``sigma_max``           →  ``sigma_max`` (RF schedule max; default 1.0)
+
+Usage
+-----
+::
+
+    from anvil_audio.pipelines.mlx_diffusion import MLXDiffusionPipeline
+
+    pipe = MLXDiffusionPipeline(
+        repo_id="stabilityai/stable-audio-open-small",
+        weights_dir="stable-audio",   # key in mlx-audiogen's MODEL_REGISTRY
+    )
+    audio = pipe.generate(
+        [{"prompt": "soft rain on leaves", "seconds_total": 10}]
+    )
+    # audio: Tensor [1, 2, T] at 44 100 Hz
+"""
+
+from __future__ import annotations
+
+import platform
+import sys
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+from anvil_audio.core.interfaces import BasePipeline
+
+
+def is_mlx_available() -> bool:
+    """Return True if running on Apple Silicon with mlx-audiogen installed.
+
+    Checks both the platform (darwin + arm64) and whether the ``mlx_audiogen``
+    package is importable.  Does **not** import mlx itself, so this is safe to
+    call at module load time.
+    """
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return False
+    import importlib.util
+    return importlib.util.find_spec("mlx_audiogen") is not None
+
+
+# Samplers understood by mlx-audiogen's StableAudioPipeline.generate()
+_MLX_SAMPLERS = {"euler", "rk4"}
+
+# Default sigma_max for the rectified-flow schedule used by mlx-audiogen
+# (distinct from the DPM++ range of 0.3–500 used by the PyTorch diffusion path)
+_RF_SIGMA_MAX = 1.0
+
+
+class MLXDiffusionPipeline(BasePipeline):
+    """``BasePipeline`` adapter for mlx-audiogen's Stable Audio Open pipeline.
+
+    Wraps ``StableAudioPipeline`` from ``mlx-audiogen`` so MLX-accelerated
+    Stable Audio models integrate with Anvil's registry, CLI, Gradio UI, and
+    MCP server.
+
+    Args:
+        repo_id:       HuggingFace repo ID used to download the T5 tokenizer
+                       (e.g. ``"stabilityai/stable-audio-open-small"``).
+        weights_dir:   Path to a directory containing converted ``.safetensors``
+                       files **or** a short key from mlx-audiogen's built-in
+                       model registry (e.g. ``"stable-audio"`` for the small
+                       variant, ``"stable-audio-1.0"`` for the full model).
+                       ``None`` lets mlx-audiogen resolve the default model.
+        default_params: Generation parameter overrides applied when callers
+                        omit individual kwargs.  Recognised keys:
+                        ``steps``, ``cfg_scale``, ``sampler_type``,
+                        ``sigma_max``.  ``sigma_min`` is accepted for API
+                        compatibility but is not used by the RF sampler.
+    """
+
+    #: Stable Audio Open outputs 44.1 kHz stereo audio.
+    _SAMPLE_RATE: int = 44100
+
+    def __init__(
+        self,
+        repo_id: str = "stabilityai/stable-audio-open-small",
+        weights_dir: str | None = None,
+        default_params: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            from mlx_audiogen.models.stable_audio import StableAudioPipeline
+        except ImportError as exc:
+            raise ImportError(
+                "mlx-audiogen is required for the MLX backend.  Install it with:\n\n"
+                "    pip install mlx-audiogen\n\n"
+                "mlx-audiogen requires macOS on Apple Silicon (M1 or later).\n\n"
+                f"Underlying error: {exc}"
+            ) from exc
+
+        self._repo_id: str = repo_id
+        self._weights_dir: str | None = weights_dir
+        self.default_params: dict[str, Any] = default_params or {
+            "steps": 100,
+            "cfg_scale": 7.0,
+            "sampler_type": "euler",
+            "sigma_min": 0.0,   # sentinel — RF sampler doesn't use sigma_min
+            "sigma_max": _RF_SIGMA_MAX,
+        }
+
+        print(
+            f"->->-> Loading MLX Stable Audio  "
+            f"repo={repo_id!r}  weights={weights_dir!r}"
+        )
+        self._pipe: Any = StableAudioPipeline.from_pretrained(
+            weights_dir=weights_dir,
+            repo_id=repo_id,
+        )
+        print("->->-> MLX Stable Audio ready")
+
+    # ------------------------------------------------------------------
+    # BasePipeline abstract property implementations
+    # ------------------------------------------------------------------
+
+    @property
+    def sample_rate(self) -> int:
+        """44 100 Hz — native output sample rate of Stable Audio Open."""
+        return self._SAMPLE_RATE
+
+    @property
+    def sample_size(self) -> int:
+        """Total samples in a generation, read from the loaded model config."""
+        try:
+            return int(self._pipe.config.sample_size)
+        except AttributeError:
+            # Fallback: 47 s at 44.1 kHz (Stable Audio Open 1.0 default)
+            return self._SAMPLE_RATE * 47
+
+    # ------------------------------------------------------------------
+    # BasePipeline abstract method implementations
+    # ------------------------------------------------------------------
+
+    def generate(
+        self,
+        conditioning: list[dict[str, Any]],
+        steps: int | None = None,
+        seed: int = -1,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Generate a batch of stereo audio waveforms via MLX Stable Audio.
+
+        Each condition dict may contain:
+
+        ===================  ==================================================
+        Key                  Description
+        ===================  ==================================================
+        ``prompt``           Text description of desired audio.
+        ``negative_prompt``  Negative guidance text (optional).
+        ``seconds_total``    Target duration in seconds.
+        ===================  ==================================================
+
+        Args:
+            conditioning: List of B condition dicts.
+            steps:        Diffusion/flow steps.  Falls back to
+                          ``default_params["steps"]`` (100).
+            seed:         RNG seed; -1 draws a random seed each call.
+            **kwargs:     Per-call overrides:
+                          - ``cfg_scale`` (float)
+                          - ``sampler_type`` (str): ``"euler"`` or ``"rk4"``
+                            (any other value is mapped to ``"euler"``)
+                          - ``sigma_max`` (float): RF noise schedule upper bound
+
+        Returns:
+            Float32 tensor ``[B, 2, T]`` in ``[-1, 1]`` at 44 100 Hz.
+        """
+        import mlx.core as mx
+
+        effective_steps = (
+            steps if steps is not None else self.default_params.get("steps", 100)
+        )
+        effective_cfg = float(
+            kwargs.get("cfg_scale", self.default_params.get("cfg_scale", 7.0))
+        )
+        raw_sampler = str(
+            kwargs.get("sampler_type", self.default_params.get("sampler_type", "euler"))
+        )
+        effective_sampler = raw_sampler if raw_sampler in _MLX_SAMPLERS else "euler"
+        effective_sigma_max = float(
+            kwargs.get("sigma_max", self.default_params.get("sigma_max", _RF_SIGMA_MAX))
+        )
+        # Clamp sigma_max to the RF range [0.01, 2.0] in case a caller passes
+        # a DPM++ value like 500.0.
+        if effective_sigma_max > 2.0 or effective_sigma_max <= 0.0:
+            effective_sigma_max = _RF_SIGMA_MAX
+
+        audio_tensors: list[Tensor] = []
+
+        for i, cond in enumerate(conditioning):
+            prompt: str = cond.get("prompt", "")
+            negative_prompt: str = cond.get("negative_prompt", "")
+            seconds_total = float(cond.get("seconds_total") or 30.0)
+
+            # Offset seed per batch item so multi-item batches aren't identical.
+            item_seed: int | None = None if seed == -1 else int(seed) + i
+
+            # mx.array (1, C, T) in [-1, 1]
+            audio_mx: Any = self._pipe.generate(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                seconds_total=seconds_total,
+                steps=int(effective_steps),
+                cfg_scale=effective_cfg,
+                sigma_max=effective_sigma_max,
+                seed=item_seed,
+                sampler=effective_sampler,
+            )
+
+            # Materialise the MLX lazy graph before converting to NumPy.
+            mx.eval(audio_mx)
+
+            # mx.array → NumPy → PyTorch.  np.array() copies on conversion
+            # from MLX; the explicit .copy() ensures the buffer is writable.
+            audio_np: np.ndarray = np.array(audio_mx)           # (1, C, T)
+            audio_t: Tensor = (
+                torch.from_numpy(audio_np.copy())
+                .squeeze(0)   # (C, T)
+                .float()
+            )
+            audio_tensors.append(audio_t)
+
+        # Pad shorter clips to the batch maximum length, then stack → [B, C, T]
+        max_len = max(t.shape[-1] for t in audio_tensors)
+        padded = [
+            F.pad(t, (0, max_len - t.shape[-1])) if t.shape[-1] < max_len else t
+            for t in audio_tensors
+        ]
+        return torch.stack(padded)
+
+    def to(self, device: str | torch.device) -> "MLXDiffusionPipeline":
+        """No-op: MLX always runs on the Metal GPU on Apple Silicon.
+
+        Present for ``BasePipeline`` interface compatibility; returns ``self``
+        without modification.
+        """
+        return self
+
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
+
+    def eval(self) -> "MLXDiffusionPipeline":
+        """No-op (MLX models are always in eval mode).  Returns ``self``."""
+        return self
+
+    def __repr__(self) -> str:
+        return (
+            f"MLXDiffusionPipeline("
+            f"repo={self._repo_id!r}, "
+            f"weights={self._weights_dir!r}, "
+            f"sample_rate={self.sample_rate}"
+            f")"
+        )
