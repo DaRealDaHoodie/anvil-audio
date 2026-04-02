@@ -1445,136 +1445,137 @@ def create_unified_txt2music_ui(
         else:
             slider_max = 240.0
 
-    with gr.Row():
-        with gr.Column(scale=6):
-            prompt = gr.Textbox(
-                show_label=False,
-                placeholder="Prompt",
-                info="Describe the sound or music you want to generate.",
-            )
-            with gr.Row(visible=is_acestep) as lyrics_row:
-                lyrics = gr.Textbox(
-                    show_label=False,
-                    placeholder="Lyrics  (optional — leave blank or type '[Instrumental]' for no vocals)",
-                    lines=4,
-                    info="Structure lyrics with section markers like [verse], [chorus], [bridge].",
-                )
-            with gr.Row(visible=is_diffusion) as neg_prompt_row:
-                negative_prompt = gr.Textbox(
-                    show_label=False,
-                    placeholder="Negative prompt",
-                    info="Describe what you don't want in the output. Leave blank to skip.",
-                )
-        generate_button = gr.Button("Generate", variant="primary", scale=1)
+    # 1. Prompt
+    prompt = gr.Textbox(
+        show_label=False,
+        placeholder="Prompt",
+        info="Describe the sound or music you want to generate.",
+    )
 
-    with gr.Row():
-        preset_file = gr.File(
-            label="Load Preset (.json sidecar)",
-            file_types=[".json"],
-            type="filepath",
-            scale=2,
-            min_width=180,
+    # 2. Lyrics (ACE-Step only) / Negative prompt (diffusion only)
+    with gr.Row(visible=is_acestep) as lyrics_row:
+        lyrics = gr.Textbox(
+            show_label=False,
+            placeholder="Lyrics  (optional — leave blank or type '[Instrumental]' for no vocals)",
+            lines=4,
+            info="Structure lyrics with section markers like [verse], [chorus], [bridge].",
         )
-        with gr.Column(scale=3):
-            preset_recent = gr.Dropdown(
-                choices=_list_recent_sidecars(_default_project or "default"),
-                label="Load Recent",
-                value=None,
-                interactive=True,
-                info="10 most recent generations from the current project.",
-            )
-        preset_refresh_btn = gr.Button("↻", scale=0, min_width=48)
-        with gr.Column(scale=4):
-            preset_status = gr.Markdown("")
+    with gr.Row(visible=is_diffusion) as neg_prompt_row:
+        negative_prompt = gr.Textbox(
+            show_label=False,
+            placeholder="Negative prompt",
+            info="Describe what you don't want in the output. Leave blank to skip.",
+        )
 
-    with gr.Row(equal_height=False):
-        with gr.Column():
-            with gr.Row():
-                seconds_start_slider = gr.Slider(
-                    minimum=0, maximum=240, step=0.5,
-                    value=0, label="Seconds start",
-                    visible=(is_diffusion and has_seconds_start),
-                    info="Where in the audio timeline generation starts.",
-                )
-                seconds_total_slider = gr.Slider(
-                    minimum=0, maximum=slider_max, step=1,
-                    value=min(default_duration, slider_max), label="Duration (seconds)",
-                    info="Target audio length in seconds.",
-                )
+    # 3. Generation controls — single row
+    with gr.Row():
+        seconds_start_slider = gr.Slider(
+            minimum=0, maximum=240, step=0.5,
+            value=0, label="Seconds start",
+            visible=(is_diffusion and has_seconds_start),
+            info="Where in the audio timeline generation starts.",
+        )
+        seconds_total_slider = gr.Slider(
+            minimum=0, maximum=slider_max, step=1,
+            value=min(default_duration, slider_max), label="Duration (seconds)",
+            info="Target audio length in seconds.",
+        )
+        steps_slider = gr.Slider(
+            minimum=1, maximum=500, step=1,
+            value=default_steps, label="Steps",
+            info="More steps = higher quality but slower.",
+        )
+        cfg_scale_slider = gr.Slider(
+            minimum=0, maximum=30, step=0.1,
+            value=default_cfg, label="CFG scale",
+            info="How closely the output follows your prompt.",
+        )
+        seed_input = gr.Number(
+            label="Seed (-1 = random)", value=-1, precision=0,
+            info="Lock this number to reproduce the exact same output.",
+        )
 
+    # Diffusion-only advanced controls (hidden for ACE-Step)
+    with gr.Group(visible=is_diffusion) as diffusion_controls:
+        with gr.Accordion("Sampler params", open=False):
             with gr.Row():
-                steps_slider = gr.Slider(
-                    minimum=1, maximum=500, step=1,
-                    value=default_steps, label="Steps",
-                    info="More steps = higher quality but slower.",
-                )
                 preview_every_slider = gr.Slider(
                     minimum=0, maximum=100, step=1,
                     value=0, label="Preview Every",
-                    visible=is_diffusion,
                     info="Show a spectrogram preview every N steps. 0 to disable.",
                 )
-                cfg_scale_slider = gr.Slider(
-                    minimum=0, maximum=30, step=0.1,
-                    value=default_cfg, label="CFG scale",
-                    info="How closely the output follows your prompt.",
+                sampler_type_dropdown = gr.Dropdown(
+                    ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
+                     "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
+                    label="Sampler type", value=default_sampler,
+                    allow_custom_value=True,
+                    info="The algorithm used to generate audio.",
+                )
+                sigma_min_slider = gr.Slider(
+                    minimum=0.0, maximum=2.0, step=0.01,
+                    value=default_sigma_min, label="Sigma min",
+                    info="Lower bound of the noise schedule.",
+                )
+                sigma_max_slider = gr.Slider(
+                    minimum=0.0, maximum=1000.0, step=0.1,
+                    value=default_sigma_max, label="Sigma max",
+                    info="Upper bound of the noise schedule.",
+                )
+                cfg_rescale_slider = gr.Slider(
+                    minimum=0.0, maximum=1, step=0.01,
+                    value=0.0, label="CFG rescale amount",
+                    info="Reduces CFG artifacts at high guidance scales.",
                 )
 
-            with gr.Row():
-                seed_input = gr.Number(
-                    label="Seed (-1 = random)", value=-1, precision=0,
-                    info="Lock this number to reproduce the exact same output.",
-                )
+        with gr.Accordion("Init audio", open=False):
+            init_audio_checkbox = gr.Checkbox(
+                label="Use init audio — upload audio to guide the generation",
+            )
+            init_audio_input = gr.Audio(
+                label="Init audio — reference file for variation",
+            )
+            init_noise_level_slider = gr.Slider(
+                minimum=0.1, maximum=100.0, step=0.01,
+                value=0.1, label="Init noise level",
+                info="How much noise to add to the init audio before regenerating.",
+            )
 
-            with gr.Group(visible=is_diffusion) as diffusion_controls:
-                with gr.Accordion("Sampler params", open=False):
-                    with gr.Row():
-                        sampler_type_dropdown = gr.Dropdown(
-                            ["dpmpp-2m-sde", "dpmpp-3m-sde", "k-heun", "k-lms",
-                             "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast"],
-                            label="Sampler type", value=default_sampler,
-                            allow_custom_value=True,
-                            info="The algorithm used to generate audio.",
-                        )
-                        sigma_min_slider = gr.Slider(
-                            minimum=0.0, maximum=2.0, step=0.01,
-                            value=default_sigma_min, label="Sigma min",
-                            info="Lower bound of the noise schedule.",
-                        )
-                        sigma_max_slider = gr.Slider(
-                            minimum=0.0, maximum=1000.0, step=0.1,
-                            value=default_sigma_max, label="Sigma max",
-                            info="Upper bound of the noise schedule.",
-                        )
-                        cfg_rescale_slider = gr.Slider(
-                            minimum=0.0, maximum=1, step=0.01,
-                            value=0.0, label="CFG rescale amount",
-                            info="Reduces CFG artifacts at high guidance scales.",
-                        )
+    # 4. Generate button (full width)
+    generate_button = gr.Button("Generate", variant="primary")
 
-                with gr.Accordion("Init audio", open=False):
-                    init_audio_checkbox = gr.Checkbox(
-                        label="Use init audio — upload audio to guide the generation",
-                    )
-                    init_audio_input = gr.Audio(
-                        label="Init audio — reference file for variation",
-                    )
-                    init_noise_level_slider = gr.Slider(
-                        minimum=0.1, maximum=100.0, step=0.01,
-                        value=0.1, label="Init noise level",
-                        info="How much noise to add to the init audio before regenerating.",
-                    )
-
+    # 5. Output
+    with gr.Row():
         with gr.Column():
             audio_output = gr.Audio(label="Output audio", interactive=False)
             audio_spectrogram_output = gr.Gallery(label="Output spectrogram", show_label=False)
+        with gr.Column():
             metadata_output = gr.JSON(label="Generation metadata")
-            send_to_init_button = gr.Button("Send to init audio", scale=1)
+            send_to_init_button = gr.Button("Send to init audio", variant="secondary")
             send_to_init_button.click(
                 fn=lambda a: a,
                 inputs=[audio_output],
                 outputs=[init_audio_input],
             )
+
+    # 6. Load Preset (below output, collapsed by default)
+    with gr.Accordion("Load Preset", open=False):
+        with gr.Row():
+            with gr.Column(scale=3):
+                preset_recent = gr.Dropdown(
+                    choices=_list_recent_sidecars(_default_project or "default"),
+                    label="Load Recent",
+                    value=None,
+                    interactive=True,
+                    info="10 most recent generations from the current project.",
+                )
+                preset_refresh_btn = gr.Button("↻ Refresh recent", variant="secondary")
+            with gr.Column(scale=2):
+                preset_file = gr.File(
+                    label="Upload sidecar (.json)",
+                    file_types=[".json"],
+                    type="filepath",
+                )
+        preset_status = gr.Markdown("")
 
     generate_button.click(
         fn=generate_unified,
