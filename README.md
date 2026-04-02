@@ -122,6 +122,10 @@ python run_gradio.py
 python run_gradio.py --model stable-audio-open-1.0 --project sfx-pack-v1
 ```
 
+#### Presets & Reproducibility
+
+Every generation saves a JSON sidecar alongside the audio containing the full parameters — prompt, seed, steps, CFG scale, model, duration, and for edits the full effects chain. These sidecars double as presets: the **Load Recent** dropdown at the bottom of the Generate tab shows your last 10 generations from the current project, and selecting one pre-populates all fields instantly. **Load Preset** accepts any `.json` sidecar via drag-and-drop, so you can share settings with collaborators or reload a preset from a different project. Tweak any field after loading and hit Generate to create a variation.
+
 ---
 
 ## ACE-Step Music Generation (optional)
