@@ -256,6 +256,7 @@ def export_audio(
     normalize_enabled: bool,
     normalize_target_db: float,
     normalize_use_lufs: bool,
+    export_fmt: str = "wav",
 ) -> str:
     """Run the chain and save via OutputManager. Returns a status string."""
     result = process_audio_chain(
@@ -315,6 +316,8 @@ def export_audio(
         },
     }
 
+    fmt = export_fmt if export_fmt in ("wav", "mp3", "ogg", "flac") else "wav"
+
     meta = GenerationMetadata(
         prompt="(edit)",
         model_name="edit",
@@ -329,12 +332,13 @@ def export_audio(
         extra={
             "source_audio_path": source_p,
             "source_sidecar_path": source_sidecar,
+            "export_format": fmt,
             "effects": effects_config,
         },
     )
 
     output_manager = OutputManager(project=project or None)
-    path, _ = output_manager.save_audio(tensor, meta, out_sr, ext="wav")
+    path, _ = output_manager.save_audio(tensor, meta, out_sr, ext=fmt)
     return f"Exported: {path}"
 
 
@@ -507,6 +511,13 @@ def create_edit_tab(
             )
             with gr.Row():
                 preview_btn = gr.Button("Preview", variant="primary")
+                export_fmt_dropdown = gr.Dropdown(
+                    ["wav", "mp3", "ogg"],
+                    value="wav",
+                    label="Format",
+                    min_width=80,
+                    info="wav = lossless · mp3 = compressed · ogg = game engines (Roblox, Unity, Godot)",
+                )
                 export_btn = gr.Button("Export", variant="secondary")
             export_status = gr.Textbox(
                 label="Export status",
@@ -550,6 +561,6 @@ def create_edit_tab(
 
     export_btn.click(
         fn=export_audio,
-        inputs=[audio_input, source_path_state, project_component] + _chain_inputs[1:],
+        inputs=[audio_input, source_path_state, project_component] + _chain_inputs[1:] + [export_fmt_dropdown],
         outputs=[export_status],
     )

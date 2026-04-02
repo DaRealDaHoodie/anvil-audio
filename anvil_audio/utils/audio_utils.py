@@ -7,19 +7,27 @@ EPS = 1e-8
 def save_audio(path: str, audio: torch.Tensor, sample_rate: int, fmt: str = "wav") -> None:
     """Save an audio tensor to a file.
 
-    Uses soundfile for wav/flac (avoids the torchcodec requirement in newer
+    Uses soundfile for wav/flac/ogg (avoids the torchcodec requirement in newer
     torchaudio versions). Falls back to torchaudio for mp3 or other formats.
 
     Args:
         path:        Destination file path.
         audio:       Tensor of shape ``(channels, frames)``, int16 or float32.
         sample_rate: Sample rate in Hz.
-        fmt:         File format — ``"wav"``, ``"flac"``, or ``"mp3"``.
+        fmt:         File format — ``"wav"``, ``"flac"``, ``"ogg"``, or ``"mp3"``.
     """
+    import numpy as np
     if fmt in ("wav", "flac"):
         import soundfile as sf
         data = audio.numpy().T  # soundfile expects (frames, channels)
         sf.write(str(path), data, sample_rate)
+    elif fmt == "ogg":
+        import soundfile as sf
+        data = audio.numpy().T
+        # OGG Vorbis only supports float — convert int16 if needed
+        if data.dtype not in (np.float32, np.float64):
+            data = data.astype(np.float32) / 32768.0
+        sf.write(str(path), data, sample_rate, format="OGG", subtype="VORBIS")
     else:
         import torchaudio
         torchaudio.save(str(path), audio, sample_rate, format=fmt)

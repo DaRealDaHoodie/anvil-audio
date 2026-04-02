@@ -278,6 +278,7 @@ def generate_cond(
     mask_marination: float | None = None,
     batch_size: int = 1,
     project: str = "",
+    audio_format: str = "wav",
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """Generate audio from a text prompt.
 
@@ -403,7 +404,7 @@ def generate_cond(
         generation_duration_seconds=_gen_duration,
     )
     path, _ = output_manager.save_audio(
-        audio_int16.cpu(), meta, sample_rate, ext="wav"
+        audio_int16.cpu(), meta, sample_rate, ext=audio_format
     )
 
     spectrogram = audio_spectrogram_image(audio_int16.cpu(), sample_rate=sample_rate)
@@ -567,6 +568,7 @@ def generate_acestep(
     cfg_scale: float = 7.0,
     seed: int = -1,
     project: str = "",
+    audio_format: str = "wav",
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """Generate music with ACE-Step.
 
@@ -630,7 +632,7 @@ def generate_acestep(
         generation_duration_seconds=_gen_duration,
         extra={"lyrics": lyrics},
     )
-    path, _ = output_manager.save_audio(audio_int16.cpu(), meta, sample_rate, ext="wav")
+    path, _ = output_manager.save_audio(audio_int16.cpu(), meta, sample_rate, ext=audio_format)
 
     spectrogram = audio_spectrogram_image(audio_int16.cpu(), sample_rate=sample_rate)
     return str(path), [spectrogram], meta.to_dict()
@@ -654,6 +656,7 @@ def generate_unified(
     init_audio: Any,
     init_noise_level: float,
     project: str,
+    audio_format: str = "wav",
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """Route to the correct generation backend based on the currently loaded pipeline type."""
     global _last_generated_path
@@ -670,6 +673,7 @@ def generate_unified(
             cfg_scale=cfg_scale,
             seed=seed,
             project=project,
+            audio_format=audio_format,
         )
     else:
         result = generate_cond(
@@ -689,6 +693,7 @@ def generate_unified(
             init_audio=init_audio,
             init_noise_level=init_noise_level,
             project=project,
+            audio_format=audio_format,
         )
     _last_generated_path = result[0]
     return result
@@ -1540,8 +1545,17 @@ def create_unified_txt2music_ui(
                 info="How much noise to add to the init audio before regenerating.",
             )
 
-    # 4. Generate button (full width)
-    generate_button = gr.Button("Generate", variant="primary")
+    # 4. Generate button + format selector
+    with gr.Row():
+        generate_button = gr.Button("Generate", variant="primary", scale=4)
+        audio_format_dropdown = gr.Dropdown(
+            ["wav", "mp3", "ogg"],
+            value="wav",
+            label="Format",
+            scale=1,
+            min_width=80,
+            info="wav = lossless · mp3 = compressed · ogg = game engines (Roblox, Unity, Godot)",
+        )
 
     # 5. Output
     with gr.Row():
@@ -1585,7 +1599,7 @@ def create_unified_txt2music_ui(
             steps_slider, preview_every_slider, cfg_scale_slider, seed_input,
             sampler_type_dropdown, sigma_min_slider, sigma_max_slider, cfg_rescale_slider,
             init_audio_checkbox, init_audio_input, init_noise_level_slider,
-            project_component,
+            project_component, audio_format_dropdown,
         ],
         outputs=[audio_output, audio_spectrogram_output, metadata_output],
         api_name="generate",

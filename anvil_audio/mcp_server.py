@@ -277,7 +277,7 @@ def generate_audio(
         steps: Diffusion/inference steps. 0 = use the model's default.
         cfg_scale: Guidance scale. 0.0 = use the model's default.
         seed: RNG seed for reproducibility. -1 = random.
-        fmt: Output format — "wav", "flac", or "mp3".
+        fmt: Output format — "wav", "flac", "mp3", or "ogg".
         project: Output project folder name. Uses the active project if
                  omitted (set with set_active_project).
         lyrics: Lyric text for ACE-Step models. Use section markers like
@@ -611,7 +611,7 @@ def list_recent_outputs(
     for root in roots:
         if not root.is_dir():
             continue
-        for ext in ("wav", "flac", "mp3"):
+        for ext in ("wav", "flac", "mp3", "ogg"):
             files.extend(root.rglob(f"*.{ext}"))
 
     files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
@@ -675,7 +675,7 @@ def list_projects() -> list[dict[str, Any]]:
     for d in base.iterdir():
         if not d.is_dir():
             continue
-        audio_files = list(d.rglob("*.wav")) + list(d.rglob("*.flac")) + list(d.rglob("*.mp3"))
+        audio_files = list(d.rglob("*.wav")) + list(d.rglob("*.flac")) + list(d.rglob("*.mp3")) + list(d.rglob("*.ogg"))
         mtime = d.stat().st_mtime
         projects.append({
             "name": d.name,

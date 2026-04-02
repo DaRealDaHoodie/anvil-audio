@@ -37,7 +37,7 @@ from anvil_audio.core.pipeline import DiffusionPipeline
 from anvil_audio.utils.torch_common import count_parameters, get_rank, get_world_size, get_best_device
 from anvil_audio.utils.audio_utils import float_to_int16_audio
 
-SUPPORTED_FORMATS = ("wav", "flac", "mp3")
+SUPPORTED_FORMATS = ("wav", "flac", "mp3", "ogg")
 
 
 # ---------------------------------------------------------------------------
