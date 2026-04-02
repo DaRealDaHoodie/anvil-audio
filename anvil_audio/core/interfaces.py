@@ -294,6 +294,7 @@ class BasePipeline(ABC):
             List of ``GenerationResult`` objects, one per conditioning item.
             For batches > 1, a ``batch_manifest.json`` is also written.
         """
+        import time
         import numpy as np
         from datetime import datetime
         from .output import GenerationMetadata, GenerationResult
@@ -309,12 +310,14 @@ class BasePipeline(ABC):
         effective_steps = steps if steps is not None else default_params.get("steps", 100)
 
         # Generate all items as a batch tensor: [B, C, T]
+        _t0 = time.perf_counter()
         audio_batch = self.generate(
             conditioning,
             steps=steps,
             seed=effective_seed,
             **kwargs,
         )
+        generation_duration = round(time.perf_counter() - _t0, 3)
 
         batch_size = audio_batch.shape[0]
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -340,6 +343,7 @@ class BasePipeline(ABC):
                 negative_prompt=cond.get("negative_prompt", ""),
                 seconds_start=float(cond.get("seconds_start", 0.0)),
                 seconds_total=float(cond.get("seconds_total", 0.0)),
+                generation_duration_seconds=generation_duration,
             )
 
             path, sidecar = output_manager.save_audio(

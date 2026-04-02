@@ -63,6 +63,9 @@ class GenerationMetadata:
         negative_prompt:  Negative conditioning text, if any.
         seconds_start:    Model-level start-time conditioning.
         seconds_total:    Model-level total-duration conditioning.
+        generation_duration_seconds: Wall-clock time from start of inference to
+                          audio file written, in seconds.  ``None`` when not
+                          measured (e.g. legacy sidecars or non-generation ops).
         extra:            Catch-all for pipeline-specific params.
     """
 
@@ -80,6 +83,7 @@ class GenerationMetadata:
     negative_prompt: str = ""
     seconds_start: float = 0.0
     seconds_total: float = 0.0
+    generation_duration_seconds: float | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

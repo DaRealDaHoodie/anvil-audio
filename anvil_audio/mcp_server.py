@@ -26,6 +26,7 @@ except ImportError:
     pass
 
 import json
+import time
 import numpy as np
 from datetime import datetime
 from pathlib import Path
@@ -194,6 +195,7 @@ def _run_generate(
         gen_kwargs.update(sampler_type=sampler, sigma_min=sigma_min, sigma_max=sigma_max)
 
     # Samplers may print progress to stdout; redirect so MCP stdio is clean.
+    _gen_t0 = time.perf_counter()
     with stdout_to_stderr():
         result = pipeline.generate(
             conditioning,
@@ -202,6 +204,7 @@ def _run_generate(
             disable_tqdm=True,
             **gen_kwargs,
         )  # [B, C, T]
+    gen_duration = round(time.perf_counter() - _gen_t0, 3)
 
     audio = result[0]  # [C, T]
     sr = pipeline.sample_rate
@@ -224,6 +227,7 @@ def _run_generate(
         sigma_max=float(params.get("sigma_max", 0.0)),
         duration_seconds=audio.shape[-1] / sr,
         timestamp=ts,
+        generation_duration_seconds=gen_duration,
         extra=extra,
     )
 
@@ -233,6 +237,7 @@ def _run_generate(
     return {
         "path": str(path),
         "sidecar_path": str(sidecar),
+        "generation_duration_seconds": gen_duration,
         "metadata": meta.to_dict(),
     }
 

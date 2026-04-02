@@ -354,6 +354,8 @@ def generate_cond(
             )
 
     # Generate via pipeline
+    import time as _time
+    _gen_t0 = _time.perf_counter()
     audio = generate_diffusion_cond(
         pipeline._model,
         conditioning=conditioning,
@@ -372,6 +374,7 @@ def generate_cond(
         callback=_preview_callback if preview_every is not None else None,
         scale_phi=cfg_rescale,
     )  # [B, C, T]
+    _gen_duration = round(_time.perf_counter() - _gen_t0, 3)
 
     # Take first item; clip to seconds_total
     audio_item = audio.squeeze(0)  # [C, T] or [B, C, T] → [C, T] for batch_size=1
@@ -397,6 +400,7 @@ def generate_cond(
         negative_prompt=negative_prompt or "",
         seconds_start=float(seconds_start),
         seconds_total=float(seconds_total),
+        generation_duration_seconds=_gen_duration,
     )
     path, _ = output_manager.save_audio(
         audio_int16.cpu(), meta, sample_rate, ext="wav"
@@ -594,12 +598,15 @@ def generate_acestep(
 
     conditioning = [{"prompt": prompt, "lyrics": lyrics, "seconds_total": seconds_total}]
 
+    import time as _time
+    _gen_t0 = _time.perf_counter()
     audio = pipeline.generate(  # type: ignore[union-attr]
         conditioning,
         steps=steps,
         seed=effective_seed,
         cfg_scale=cfg_scale,
     )  # [1, C, T]
+    _gen_duration = round(_time.perf_counter() - _gen_t0, 3)
 
     audio_item = audio[0]  # [C, T]
     audio_int16 = float_to_int16_audio(audio_item)
@@ -620,6 +627,7 @@ def generate_acestep(
         sigma_max=0.0,
         duration_seconds=audio_int16.shape[-1] / sample_rate,
         timestamp=ts,
+        generation_duration_seconds=_gen_duration,
         extra={"lyrics": lyrics},
     )
     path, _ = output_manager.save_audio(audio_int16.cpu(), meta, sample_rate, ext="wav")
