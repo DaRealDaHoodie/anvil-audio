@@ -297,13 +297,19 @@ Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`
   "mcpServers": {
     "anvil-audio": {
       "command": "/path/to/anvil-audio/.venv/bin/python",
-      "args": ["-m", "anvil_audio.mcp_server"]
+      "args": ["-m", "anvil_audio.mcp_server"],
+      "env": {
+        "ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"
+      }
     }
   }
 }
 ```
 
-Replace `/path/to/anvil-audio` with the absolute path to your clone.
+Replace `/path/to/anvil-audio` with the absolute path to your clone. The `env`
+block is required for ACE-Step models — Claude Desktop doesn't inherit your
+shell environment, so the variable must be set explicitly. Omit the `env` block
+if you're only using Stable Audio models.
 
 ### Claude Code config
 
@@ -315,7 +321,10 @@ Add to `~/.claude.json` under `mcpServers`:
     "anvil-audio": {
       "command": "/path/to/anvil-audio/.venv/bin/python",
       "args": ["-m", "anvil_audio.mcp_server"],
-      "type": "stdio"
+      "type": "stdio",
+      "env": {
+        "ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"
+      }
     }
   }
 }
