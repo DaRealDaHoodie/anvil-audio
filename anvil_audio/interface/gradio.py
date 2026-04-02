@@ -1484,7 +1484,8 @@ def create_unified_txt2music_ui(
                 info="10 most recent generations from the current project.",
             )
         preset_refresh_btn = gr.Button("↻", scale=0, min_width=48)
-        preset_status = gr.Markdown("", scale=4)
+        with gr.Column(scale=4):
+            preset_status = gr.Markdown("")
 
     with gr.Row(equal_height=False):
         with gr.Column():
