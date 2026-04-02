@@ -160,6 +160,35 @@ anvil --list-models
 
 Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) to make it permanent.
 
+### LM lyric planner
+
+ACE-Step ships a separate 5 Hz LM lyric planner that produces structured `audio_codes` fed
+into the DiT. Using it gives significantly better vocal structure and timing compared to
+passing raw lyric text directly — this is the path the standalone ACE-Step Gradio UI uses.
+
+Anvil initialises the LM planner automatically using the checkpoint specified in the registry
+entry. The built-in entries default to:
+
+| Model | LM checkpoint |
+|-------|---------------|
+| `acestep-v1.5-turbo` | `acestep-5Hz-lm-1.7B` (lighter, faster) |
+| `acestep-v1.5-sft` | `acestep-5Hz-lm-4B` (heavier, better quality) |
+
+Both checkpoints are relative paths within `<ACESTEP_PROJECT_ROOT>/checkpoints/` and are
+downloaded automatically from HuggingFace on first use.
+
+You can override the LM checkpoint for a specific registry entry via `lm_model_path` in
+`registry.yaml` (see [ACE-Step models](#ace-step-models-1) below), or set a global fallback
+for all ACE-Step models via an environment variable:
+
+```bash
+export ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-4B
+```
+
+If the LM planner fails to initialise (missing checkpoint, memory constraints, etc.) Anvil
+falls back gracefully to DiT-only generation and prints a warning. For purely instrumental
+tracks the LM step is skipped automatically regardless of the setting.
+
 ### Apple Silicon acceleration
 
 On macOS, Anvil automatically sets `ACESTEP_LM_BACKEND=mlx` before initializing ACE-Step,
@@ -487,6 +516,10 @@ with the same name as a built-in will override it.
   pipeline_type: acestep
   acestep_project_root: /path/to/ACE-Step    # path to the cloned repo
   model_config_path: acestep-v15-turbo        # checkpoint variant name
+  # Optional: override the LM lyric-planner checkpoint.
+  # Relative paths are resolved under <acestep_project_root>/checkpoints/.
+  # Omit to use the built-in default (1.7B for turbo, 4B for sft).
+  lm_model_path: acestep-5Hz-lm-1.7B
   default_params:
     steps: 50
     cfg_scale: 4.0

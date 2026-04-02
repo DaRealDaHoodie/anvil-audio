@@ -95,6 +95,16 @@ class RegistryEntry:
                             ``pretrained_name`` and cached at
                             ``~/.cache/anvil-audio/mlx-weights/<model-slug>/``.
                             Only used when ``pipeline_type == "mlx_diffusion"``.
+        lm_model_path:      Path (relative to ``checkpoints/``) or absolute
+                            path to the ACE-Step 5 Hz LM lyric-planner
+                            checkpoint directory.  Typical values:
+                            ``"acestep-5Hz-lm-1.7B"`` (lighter/faster) or
+                            ``"acestep-5Hz-lm-4B"`` (higher quality).  ``None``
+                            disables LM planning for this entry; generation
+                            falls back to direct DiT with the raw lyric text.
+                            Only used when ``pipeline_type == "acestep"``.
+                            Can also be set globally via the
+                            ``ACESTEP_LM_MODEL_PATH`` environment variable.
         max_duration:       Maximum allowed generation duration in seconds.
                             For diffusion models this is ``sample_size /
                             sample_rate`` from the model config; set it
@@ -114,6 +124,7 @@ class RegistryEntry:
     pipeline_type: str = "diffusion"
     acestep_project_root: str | None = None
     mlx_weights_dir: str | None = None
+    lm_model_path: str | None = None
     max_duration: float | None = None
 
     def resolved_params(self) -> dict[str, Any]:
@@ -267,6 +278,7 @@ class ModelRegistry:
                     pipeline_type="acestep",
                     acestep_project_root=_acestep_root,
                     model_config_path="acestep-v15-turbo",
+                    lm_model_path="acestep-5Hz-lm-1.7B",
                     max_duration=600.0,
                     default_params={
                         "steps": 50,
@@ -282,6 +294,7 @@ class ModelRegistry:
                     pipeline_type="acestep",
                     acestep_project_root=_acestep_root,
                     model_config_path="acestep-v15-sft",
+                    lm_model_path="acestep-5Hz-lm-4B",
                     max_duration=600.0,
                     default_params={
                         "steps": 100,
@@ -386,6 +399,7 @@ class ModelRegistry:
                     pipeline_type=item.get("pipeline_type", "diffusion"),
                     acestep_project_root=item.get("acestep_project_root"),
                     mlx_weights_dir=item.get("mlx_weights_dir"),
+                    lm_model_path=item.get("lm_model_path"),
                     max_duration=float(raw_max) if raw_max is not None else None,
                 )
                 entry.validate()
@@ -453,10 +467,13 @@ def load_pipeline(
         # For ACE-Step, map the generic device string to what AceStepHandler
         # understands ("auto", "cuda", "mps", "cpu").
         acestep_device = _device if _device in {"cuda", "mps", "cpu"} else "auto"
+        # Resolve LM model path: registry entry > ACESTEP_LM_MODEL_PATH env var.
+        lm_path = entry.lm_model_path or os.environ.get("ACESTEP_LM_MODEL_PATH")
         return ACEStepPipeline(
             project_root=entry.acestep_project_root,  # type: ignore[arg-type]
             config_path=entry.model_config_path or "acestep-v15-turbo",
             device=acestep_device,
+            lm_model_path=lm_path,
             default_params=entry.resolved_params(),
         )
 
