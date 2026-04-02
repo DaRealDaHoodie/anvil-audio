@@ -256,6 +256,10 @@ def generate_cond(
     Returns:
         ``(wav_path, spectrogram_images, metadata_dict)``
     """
+    if not prompt or not prompt.strip():
+        import gradio as gr
+        raise gr.Error("Please enter a prompt before generating.")
+
     pipeline = _get_pipeline()
     empty_cache()
     gc.collect()
@@ -616,6 +620,9 @@ def generate_unified(
 ) -> tuple[str, list[Any], dict[str, Any]]:
     """Route to the correct generation backend based on the currently loaded pipeline type."""
     global _last_generated_path
+    if not prompt or not prompt.strip():
+        import gradio as gr
+        raise gr.Error("Please enter a prompt before generating.")
     if _pipeline_type == "acestep":
         result = generate_acestep(
             prompt=prompt,
@@ -872,6 +879,8 @@ def _model_load_ui_unified(
             gr.update(value="ode"),
             gr.update(value=0.0),
             gr.update(value=0.0),
+            gr.update(visible=False),  # inpaint_content — ACE-Step doesn't support it
+            gr.update(visible=True),   # inpaint_unsupported
         )
 
     # Diffusion model: max duration from registry entry or loaded model config
@@ -891,6 +900,8 @@ def _model_load_ui_unified(
         gr.update(value=p.get("sampler_type", "dpmpp-3m-sde")),
         gr.update(value=float(p.get("sigma_min", 0.03))),
         gr.update(value=float(p.get("sigma_max", 500.0))),
+        gr.update(visible=True),   # inpaint_content
+        gr.update(visible=False),  # inpaint_unsupported
     )
 
 
@@ -1585,11 +1596,6 @@ def create_ui(
                         model_config=_mc,
                         initial_max_duration=_max_dur,
                     )
-                    load_model_btn.click(
-                        fn=_model_load_ui_unified,
-                        inputs=_btn_inputs,
-                        outputs=[model_status, *param_comps],
-                    )
                 else:
                     # Non-text2music model types keep their existing dedicated UIs
                     if model_type == "diffusion_uncond":
@@ -1600,16 +1606,49 @@ def create_ui(
                         create_diffusion_prior_ui(loaded_config, project_textbox)
                     elif model_type == "lm":
                         create_lm_ui(loaded_config, project_textbox)
-                    load_model_btn.click(
-                        fn=_model_load_ui,
-                        inputs=_btn_inputs,
-                        outputs=[model_status],
-                    )
+
+            if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "acestep"}:
+                with gr.Tab("Inpainting"):
+                    # Always render the full inpainting UI so it's ready when the user
+                    # switches from ACE-Step to a diffusion model.  Use a minimal fallback
+                    # config when the initial model is ACE-Step so the sliders initialise
+                    # with reasonable defaults.
+                    _inpaint_cfg = loaded_config if not is_acestep else {
+                        "model_type": "diffusion_cond",
+                        "sample_rate": 44100,
+                        "sample_size": 2076672,
+                        "model": {"conditioning": {"configs": [
+                            {"id": "seconds_start"},
+                            {"id": "seconds_total"},
+                        ]}},
+                    }
+                    with gr.Group(visible=not is_acestep) as _inpaint_content:
+                        create_sampling_ui(_inpaint_cfg, project_textbox, inpainting=True)
+                    with gr.Group(visible=is_acestep) as _inpaint_unsupported:
+                        gr.Markdown(
+                            "**Inpainting is not supported by the current model.**  \n"
+                            "Load a Stable Audio diffusion model "
+                            "(e.g. `stable-audio-open-1.0`) to use this tab."
+                        )
 
             with gr.Tab("Edit"):
                 create_edit_tab(
                     project_component=project_textbox,
                     last_path_getter=lambda: _last_generated_path,
                 )
+
+        # Wire the Load Model button after all tab components are defined.
+        if model_type in {"diffusion_cond", "diffusion_cond_inpaint", "acestep"}:
+            load_model_btn.click(
+                fn=_model_load_ui_unified,
+                inputs=_btn_inputs,
+                outputs=[model_status, *param_comps, _inpaint_content, _inpaint_unsupported],
+            )
+        else:
+            load_model_btn.click(
+                fn=_model_load_ui,
+                inputs=_btn_inputs,
+                outputs=[model_status],
+            )
 
     return interface
