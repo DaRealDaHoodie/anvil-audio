@@ -7,9 +7,10 @@ Anvil Audio is a refactored and extended fork of
 It turns a single-model inference codebase into a clean, swappable-component platform where
 models, conditioners, and compressors are first-class abstractions.
 
-Supports **Stable Audio** diffusion models (Stability AI) and
+Supports **Stable Audio** diffusion models (Stability AI),
 **[ACE-Step](https://github.com/ace-step/ACE-Step)** music-generation models (ACE Studio /
-StepFun) through a unified registry, CLI, and Gradio UI.
+StepFun), and **MLX-accelerated Stable Audio** models on Apple Silicon — all through a unified
+registry, CLI, and Gradio UI.
 
 ---
 
@@ -18,9 +19,10 @@ StepFun) through a unified registry, CLI, and Gradio UI.
 - **Pluggable pipeline architecture** — `BasePipeline`, `BaseGenerator`, `BaseCompressor`, `BaseConditioner` ABCs; swap any component without touching the rest of your workflow.
 - **Named model registry** — `anvil generate --model stable-audio-open-1.0 --prompt "..."` loads the right pipeline automatically; add your own entries in `~/.anvil-audio/registry.yaml`.
 - **ACE-Step support** — optional integration with [ACE-Step v1.5](https://github.com/ace-step/ACE-Step) for full-song music generation with lyrics and style tags.
-- **Output management** — collision-free timestamped filenames, JSON metadata sidecars, batch manifests, and project-scoped folders under `~/anvil-audio-outputs/`.
+- **MLX acceleration** — Apple Silicon users can install `mlx-audiogen` to get native Metal GPU inference for Stable Audio models (~2x faster than PyTorch MPS); weights are auto-converted and cached on first use.
+- **Output management** — collision-free timestamped filenames, JSON metadata sidecars with `generation_duration_seconds`, batch manifests, and project-scoped folders under `~/anvil-audio-outputs/`.
 - **MPS / CUDA / CPU auto-detection** — runs on Apple Silicon, NVIDIA GPUs, or CPU with no flags needed.
-- **`anvil generate` CLI** — multi-GPU via Accelerate, wav/flac/mp3 output, batch YAML conditions, per-run seed control.
+- **`anvil generate` CLI** — multi-GPU via Accelerate, wav/flac/mp3 output, batch YAML conditions, per-run seed control; `anvil --list-models` works at the top level.
 - **Gradio web UI** — project name, seed input, live metadata panel, model dropdown with hot-reload, device field.
 - **Built-in audio editor** — post-processing tab with normalize, trim, fade, time stretch, pitch shift, EQ, and reverb; non-destructive exports with full effects sidecar.
 - **MCP server** — expose all generation and editing capabilities to Claude and other MCP clients over stdio; models are cached between calls.
@@ -92,7 +94,7 @@ anvil generate --model stable-audio-open-1.0 --prompt "wooden door creak"
 anvil generate --model stable-audio-open-1.0 --prompt "wooden door creak"
 
 # List all registered models
-anvil generate --list-models
+anvil --list-models
 
 # Batch generation from a YAML file
 anvil generate --model stable-audio-open-1.0 --cond-yaml-path batch.yaml --output-dir ./out
@@ -153,10 +155,24 @@ ACE-Step entries will not appear in the registry at all.
 export ACESTEP_PROJECT_ROOT=/path/to/your/ACE-Step
 
 # Verify it's registered:
-anvil generate --list-models
+anvil --list-models
 ```
 
 Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) to make it permanent.
+
+### Apple Silicon acceleration
+
+On macOS, Anvil automatically sets `ACESTEP_LM_BACKEND=mlx` before initializing ACE-Step,
+enabling the MLX backend for the 5Hz LM lyric planner (unless you've already set the variable
+yourself). The DiT and VAE also run via native MLX on Apple Silicon automatically — no flags
+needed.
+
+If you run the ACE-Step MCP server or API separately, set the variable in your shell or MCP
+`env` block:
+
+```bash
+export ACESTEP_LM_BACKEND=mlx
+```
 
 ### Built-in registry entries
 
@@ -256,6 +272,82 @@ outside Anvil.
 
 ---
 
+## MLX Acceleration (Apple Silicon)
+
+On M1/M2/M3/M4 Macs, Anvil can run Stable Audio inference through
+[mlx-audiogen](https://github.com/jasonvassallo/mlx-audio-generate), which ports the DiT,
+VAE, and T5 conditioner to Apple's native MLX framework. This runs directly on the Metal GPU
+without going through PyTorch MPS.
+
+**Benchmark — 30-second clip, `stable-audio-open-1.0`:**
+
+| Backend | Time |
+|---|---|
+| PyTorch MPS | ~61 s |
+| MLX (native Metal) | ~31 s |
+
+### Enable MLX
+
+```bash
+pip install mlx-audiogen
+```
+
+That's it. Once installed, two new models appear in the registry automatically:
+
+| Model name | Source model |
+|---|---|
+| `stable-audio-open-small-mlx` | `stabilityai/stable-audio-open-small` |
+| `stable-audio-open-1.0-mlx` | `stabilityai/stable-audio-open-1.0` |
+
+On first use, Anvil downloads the original HuggingFace weights and converts them to MLX
+safetensors format. Converted weights are cached at:
+
+```
+~/.cache/anvil-audio/mlx-weights/<model-slug>/
+```
+
+Subsequent loads skip conversion and go straight to inference.
+
+### Usage
+
+```bash
+# CLI
+anvil generate --model stable-audio-open-1.0-mlx --prompt "rain on leaves"
+
+# Gradio — select from the model dropdown
+python run_gradio.py --model stable-audio-open-1.0-mlx
+```
+
+MLX models use a rectified-flow sampler (`euler` or `rk4`). The `sigma_max` range is
+`[0.01, 2.0]` — values outside this range (e.g. the PyTorch default of 500.0) are
+automatically clamped to `1.0`.
+
+### Requirements
+
+- macOS on Apple Silicon (M1 or later)
+- `pip install mlx-audiogen`
+
+mlx-audiogen is an optional dependency — Anvil works normally on all platforms without it.
+The MLX model entries only appear in the registry on Apple Silicon with mlx-audiogen installed.
+
+### User registry — custom MLX weights
+
+If you have pre-converted weights in a custom directory, point to them via `mlx_weights_dir`:
+
+```yaml
+- name: my-mlx-model
+  pipeline_type: mlx_diffusion
+  pretrained_name: stabilityai/stable-audio-open-small
+  mlx_weights_dir: /path/to/my/converted/weights
+  default_params:
+    steps: 100
+    cfg_scale: 7.0
+    sampler_type: euler
+    sigma_max: 1.0
+```
+
+---
+
 ## MCP Server
 
 Anvil exposes its full capabilities as an [MCP](https://modelcontextprotocol.io) server so
@@ -283,6 +375,10 @@ The `mcp` package is not installed by default. Everything else is already a depe
 | `get_generation_metadata` | Read the sidecar for any output file |
 | `list_projects` | Project folders under `~/anvil-audio-outputs/` |
 | `set_active_project` | Set a default project so you don't repeat it every call |
+
+All `generate_audio` and `batch_generate` responses include `generation_duration_seconds` —
+the wall-clock time from the start of inference to the file being written. This lets you
+compare backends directly (e.g. PyTorch MPS vs MLX) without any external timing.
 
 Models are loaded lazily on first use and cached between calls — switching between
 two models during a session only pays the load cost once per model.
@@ -338,6 +434,7 @@ Once configured, Claude can generate and edit audio directly:
 You:    Generate a short thunderstorm ambience clip
 Claude: [calls generate_audio(prompt="thunderstorm ambience, rain, distant thunder", duration_seconds=20)]
         Generated: ~/anvil-audio-outputs/default/20260401_181907_thunderstorm_...wav
+        Generation time: 31.2 s
 
 You:    Add a slight fade in and normalize it to -14 LUFS
 Claude: [calls edit_audio(file_path="...", fade_in=2.0, normalize=True,
@@ -365,6 +462,22 @@ with the same name as a built-in will override it.
   model_config_path: /path/to/config.json
   ckpt_path: /path/to/model.ckpt
   pretransform_ckpt_path: /path/to/vae.ckpt
+```
+
+### MLX models (Apple Silicon)
+
+```yaml
+- name: my-mlx-model
+  pipeline_type: mlx_diffusion
+  pretrained_name: stabilityai/stable-audio-open-small
+  # Optional: point to a directory with pre-converted MLX safetensors.
+  # Omit to use the auto-convert cache at ~/.cache/anvil-audio/mlx-weights/
+  mlx_weights_dir: /path/to/converted/weights
+  default_params:
+    steps: 100
+    cfg_scale: 7.0
+    sampler_type: euler
+    sigma_max: 1.0
 ```
 
 ### ACE-Step models
@@ -404,7 +517,7 @@ with the same name as a built-in will override it.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--model NAME` | — | Registry model name |
-| `--list-models` | — | Print registry and exit |
+| `--list-models` | — | Print registry and exit (also works as `anvil --list-models`) |
 | `--model-config PATH` | — | Legacy: local JSON config |
 | `--ckpt-path PATH` | — | Legacy: local checkpoint |
 | `--pretransform-ckpt-path PATH` | — | Separate VAE checkpoint |
@@ -572,9 +685,10 @@ singularity build anvil-audio.sif docker-daemon://anvil-audio
 ## Backlog
 
 - [ ] PyPI package (`pip install anvil-audio`)
-- [ ] Add more audio augmentations
-- [ ] Add troubleshooting section
-- [ ] Add contribution guidelines
+- [ ] Tooltips / info text on all Gradio controls
+- [ ] Contribution guidelines
+- [ ] More audio augmentations
+- [ ] Troubleshooting section
 
 ---
 

@@ -46,6 +46,22 @@ is bundled with Anvil.
 
 ---
 
+## mlx-audiogen
+
+**Project:** mlx-audiogen
+**URL:** https://github.com/jasonvassallo/mlx-audio-generate
+**Author:** Jason Vassallo
+**License:** Apache 2.0
+
+**Optional dependency.** Not installed by default. Install with `pip install mlx-audiogen`.
+When present on Apple Silicon (M1/M2/M3/M4), Anvil uses mlx-audiogen's `StableAudioPipeline`
+and `convert_stable_audio` via the `MLXDiffusionPipeline` adapter
+(`anvil_audio/pipelines/mlx_diffusion.py`) to run Stable Audio inference on Apple's native
+MLX framework. Converted weights are cached locally — no mlx-audiogen source is bundled
+with Anvil.
+
+---
+
 ## Stable Audio Open model weights
 
 **Project:** Stable Audio Open (1.0 and Small)
