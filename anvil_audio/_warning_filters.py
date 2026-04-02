@@ -38,6 +38,7 @@ _DEPRECATION_MODULES: tuple[str, ...] = (
 _USER_WARNING_PATTERNS: tuple[str, ...] = (
     r".*flash.?attn.*",          # "flash_attn not installed" from x_transformers / others
     r".*xformers.*not installed.*",
+    r".*pkg_resources is deprecated.*",  # clip/clip.py on setuptools ≥ 81
 )
 
 
