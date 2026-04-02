@@ -5,6 +5,7 @@ Usage::
 
     anvil generate --model stable-audio-open-1.0 --prompt "wooden door creak"
     anvil generate --model sfx-v1 --cond-yaml-path batch.yaml --output-dir ./out
+    anvil --list-models
     anvil generate --list-models
     anvil generate --model-config path/to/config.json --ckpt-path path/to/ckpt.pt \\
         --prompt "rain on tin roof" --output-dir ./out
@@ -31,6 +32,13 @@ def main() -> None:
         _print_help()
         sys.exit(0)
 
+    # Top-level shorthand: anvil --list-models → anvil generate --list-models
+    if sys.argv[1] == "--list-models":
+        sys.argv = ["anvil generate", "--list-models"]
+        from anvil_audio._cli_generate import main as gen_main
+        gen_main()
+        return
+
     sub = sys.argv[1]
     # Remove the subcommand token so the delegated parser sees a clean argv.
     sys.argv = [f"anvil {sub}"] + sys.argv[2:]
@@ -51,7 +59,8 @@ def _print_help() -> None:
         "Usage:  anvil [--verbose] <subcommand> [options]\n"
         "\n"
         "Global flags:\n"
-        "  --verbose   Show all upstream deprecation warnings (default: suppressed)\n"
+        "  --verbose      Show all upstream deprecation warnings (default: suppressed)\n"
+        "  --list-models  List all available models and exit\n"
         "\n"
         "Subcommands:\n"
         "  generate    Generate audio from a model and prompt\n"
