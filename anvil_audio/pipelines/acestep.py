@@ -37,6 +37,7 @@ Usage
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -119,20 +120,35 @@ class ACEStepPipeline(BasePipeline):
             "sigma_max": 0.0,
         }
 
+        # On macOS, set ACESTEP_LM_BACKEND=mlx unless the user has already
+        # set it.  The env var enables the MLX LM lyric-planner backend (2-3x
+        # faster than PyTorch on Apple Silicon) for any ACE-Step code paths
+        # that read it (API server, subprocesses, future handler versions).
+        # Note: the DiT and VAE already use native MLX on Apple Silicon via
+        # AceStepHandler's initialize_service(use_mlx_dit=True) default; this
+        # env var covers the separate 5Hz LM planner component.
+        if sys.platform == "darwin" and "ACESTEP_LM_BACKEND" not in os.environ:
+            os.environ["ACESTEP_LM_BACKEND"] = "mlx"
+
+        on_apple_silicon = sys.platform == "darwin"
         print(
             f"->->-> Initialising ACE-Step  "
             f"config={config_path!r}  device={device!r}  "
-            f"offload={offload_to_cpu}",
+            f"offload={offload_to_cpu}"
+            + ("  mlx=DiT+VAE+LM" if on_apple_silicon else ""),
             file=sys.stderr,
         )
         # initialize_service loads model weights and may print to stdout;
         # redirect so MCP stdio is not corrupted.
+        # use_mlx_dit=True (default) activates native MLX acceleration for the
+        # DiT and VAE when device resolves to "mps" or "cpu" on Apple Silicon.
         with stdout_to_stderr():
             status, success = self._handler.initialize_service(
                 project_root=self._project_root,
                 config_path=config_path,
                 device=device,
                 offload_to_cpu=offload_to_cpu,
+                use_mlx_dit=True,
             )
         if not success:
             raise RuntimeError(

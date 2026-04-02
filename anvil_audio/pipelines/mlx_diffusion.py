@@ -89,6 +89,57 @@ _REQUIRED_FILES = (
 # Anvil's local cache for auto-converted MLX weights.
 _MLX_CACHE_ROOT = Path.home() / ".cache" / "anvil-audio" / "mlx-weights"
 
+# Correct DiT configs for known Stability AI models.
+# mlx-audiogen's convert_stable_audio() hardcodes small-model dims in the
+# output config.json regardless of which model is converted.  We patch it
+# afterwards for models whose architecture differs from the small model.
+_KNOWN_DIT_CONFIGS: dict[str, dict] = {
+    "stabilityai/stable-audio-open-1.0": {
+        "io_channels": 64,
+        "embed_dim": 1536,
+        "depth": 24,
+        "num_heads": 24,
+        "cond_token_dim": 768,
+        "global_cond_dim": 1536,
+        "project_cond_tokens": False,
+        "timestep_features_dim": 256,
+    },
+    # small model matches what the conversion writes; no patch needed.
+}
+
+
+def _patch_config_if_needed(config_path: Path, repo_id: str) -> None:
+    """Overwrite the DiT section of *config_path* when the conversion wrote
+    the wrong (hardcoded small-model) architecture.
+
+    mlx-audiogen's ``convert_stable_audio`` always writes the small model's
+    DiT config (embed_dim=1024, num_heads=8, depth=16) regardless of the
+    source model.  For larger models like ``stable-audio-open-1.0`` this
+    causes a shape mismatch when loading: the saved weights have
+    ``transformer.rotary_pos_emb.inv_freq`` sized for the real architecture,
+    but the model is initialised with the wrong dims and allocates a
+    differently sized tensor.
+
+    This function patches the config.json with the correct values from
+    ``_KNOWN_DIT_CONFIGS`` so the model is built with the right architecture
+    before weights are loaded.
+    """
+    if repo_id not in _KNOWN_DIT_CONFIGS:
+        return
+    import json
+    with open(config_path) as f:
+        cfg = json.load(f)
+    dit_override = _KNOWN_DIT_CONFIGS[repo_id]
+    cfg.setdefault("dit", {}).update(dit_override)
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(
+        f"[mlx] Patched config.json for {repo_id} "
+        f"(embed_dim={dit_override['embed_dim']}, "
+        f"num_heads={dit_override['num_heads']})",
+        file=sys.stderr,
+    )
+
 
 def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
     """Return a path to a complete converted-weights directory.
@@ -130,6 +181,10 @@ def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
     cache_path = _MLX_CACHE_ROOT / slug
     if cache_path.is_dir() and all((cache_path / f).exists() for f in _REQUIRED_FILES):
         print(f"[mlx] Using cached weights at {cache_path}", file=sys.stderr)
+        # Patch config.json in case this cache was created before we added the
+        # architecture correction (e.g. an existing stable-audio-open-1.0 cache
+        # with the wrong hardcoded dims).
+        _patch_config_if_needed(cache_path / "config.json", repo_id)
         return cache_path
 
     # 3. Auto-convert: download from HF and convert to MLX safetensors.
@@ -162,6 +217,10 @@ def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
             "You can also convert manually with:\n"
             f"    mlx-audiogen-convert --model {repo_id} --output {cache_path}"
         ) from exc
+
+    # Patch the config.json written by conversion with the correct architecture
+    # for models that differ from the small model defaults.
+    _patch_config_if_needed(cache_path / "config.json", repo_id)
 
     return cache_path
 
@@ -250,11 +309,29 @@ class MLXDiffusionPipeline(BasePipeline):
         )
         # from_pretrained prints "Loading VAE/DiT/T5/conditioners..." to stdout;
         # redirect so MCP stdio is not corrupted.
-        with stdout_to_stderr():
-            self._pipe: Any = StableAudioPipeline.from_pretrained(
-                weights_dir=str(resolved_weights),
-                repo_id=repo_id,
-            )
+        try:
+            with stdout_to_stderr():
+                self._pipe: Any = StableAudioPipeline.from_pretrained(
+                    weights_dir=str(resolved_weights),
+                    repo_id=repo_id,
+                )
+        except Exception as exc:
+            exc_str = str(exc)
+            # Shape mismatches during weight loading indicate a config/weight
+            # mismatch — usually the conversion wrote the wrong architecture
+            # dims.  Give a clear diagnostic rather than a cryptic traceback.
+            if "shape" in exc_str.lower() or "expected" in exc_str.lower():
+                pt_name = repo_id.split("/")[-1]
+                raise RuntimeError(
+                    f"MLX model loading failed for {repo_id!r} — the converted "
+                    f"weights don't match the model architecture.\n\n"
+                    f"  Error: {exc}\n\n"
+                    f"Try deleting the cached weights and re-converting:\n"
+                    f"    rm -rf {resolved_weights}\n\n"
+                    f"Or use the PyTorch version instead:\n"
+                    f"    anvil generate --model {pt_name}"
+                ) from exc
+            raise
         print("->->-> MLX Stable Audio ready", file=sys.stderr)
 
     # ------------------------------------------------------------------
