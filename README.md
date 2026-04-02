@@ -145,11 +145,17 @@ pip install "transformers>=4.51.0,<4.58.0"
 
 The model weights are downloaded automatically from HuggingFace the first time you generate.
 
-To use a custom install path, set `ACESTEP_PROJECT_ROOT` before launching:
+**`ACESTEP_PROJECT_ROOT` must be set** for Anvil to find the ACE-Step models. Without it,
+ACE-Step entries will not appear in the registry at all.
 
 ```bash
 export ACESTEP_PROJECT_ROOT=/path/to/your/ACE-Step
+
+# Verify it's registered:
+anvil generate --list-models
 ```
+
+Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) to make it permanent.
 
 ### Built-in registry entries
 

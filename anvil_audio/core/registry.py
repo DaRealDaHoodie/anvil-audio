@@ -231,10 +231,7 @@ class ModelRegistry:
         #   2. The hard-coded local installation path known at authoring time
         # Entries are only added when the project root directory actually exists
         # so that the registry stays clean on machines without ACE-Step.
-        _acestep_root = os.environ.get(
-            "ACESTEP_PROJECT_ROOT",
-            os.path.expanduser("~/Developer/GitRepos/ACE-Step-1.5"),
-        )
+        _acestep_root = os.environ.get("ACESTEP_PROJECT_ROOT", "")
         if os.path.isdir(_acestep_root):
             builtin += [
                 RegistryEntry(
