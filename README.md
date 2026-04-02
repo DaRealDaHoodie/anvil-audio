@@ -718,7 +718,6 @@ singularity build anvil-audio.sif docker-daemon://anvil-audio
 ## Backlog
 
 - [ ] PyPI package (`pip install anvil-audio`)
-- [ ] Tooltips / info text on all Gradio controls
 - [ ] Contribution guidelines
 - [ ] More audio augmentations
 - [ ] Troubleshooting section
