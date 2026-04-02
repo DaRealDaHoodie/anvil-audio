@@ -136,8 +136,8 @@ ACE-Step is **optional**. If you don't install it, all other Anvil functionality
 
 ```bash
 # Clone the ACE-Step repo (Anvil imports it directly — no pip install needed)
-git clone https://github.com/ace-step/ACE-Step.git ~/Developer/GitRepos/ACE-Step-1.5
-cd ~/Developer/GitRepos/ACE-Step-1.5
+git clone https://github.com/ace-step/ACE-Step.git /path/to/ACE-Step
+cd /path/to/ACE-Step
 
 # Install ACE-Step's dependencies into your Anvil venv
 pip install -r requirements.txt
