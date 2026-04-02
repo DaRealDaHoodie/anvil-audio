@@ -87,11 +87,13 @@ class RegistryEntry:
                             ``"mlx_diffusion"`` (Apple Silicon only).
         acestep_project_root: Path to the ACE-Step repository root (required
                             when ``pipeline_type == "acestep"``).
-        mlx_weights_dir:    Path to a local dir with converted safetensors
-                            **or** a short key from mlx-audiogen's built-in
-                            model registry (e.g. ``"stable-audio"``,
-                            ``"stable-audio-1.0"``).  ``None`` lets
-                            mlx-audiogen auto-download the default model.
+        mlx_weights_dir:    Path to a local directory that already contains
+                            converted MLX ``.safetensors`` files
+                            (``config.json``, ``vae.safetensors``, etc.).
+                            ``None`` (the default) triggers auto-convert on
+                            first load: weights are downloaded from
+                            ``pretrained_name`` and cached at
+                            ``~/.cache/anvil-audio/mlx-weights/<model-slug>/``.
                             Only used when ``pipeline_type == "mlx_diffusion"``.
         max_duration:       Maximum allowed generation duration in seconds.
                             For diffusion models this is ``sample_size /
@@ -306,7 +308,7 @@ class ModelRegistry:
                     name="stable-audio-open-small-mlx",
                     pipeline_type="mlx_diffusion",
                     pretrained_name="stabilityai/stable-audio-open-small",
-                    mlx_weights_dir="stable-audio",
+                    mlx_weights_dir=None,   # auto-converts to ~/.cache/anvil-audio/mlx-weights/
                     max_duration=11.0,
                     default_params={
                         "steps": 25,
@@ -320,7 +322,7 @@ class ModelRegistry:
                     name="stable-audio-open-1.0-mlx",
                     pipeline_type="mlx_diffusion",
                     pretrained_name="stabilityai/stable-audio-open-1.0",
-                    mlx_weights_dir="stable-audio-1.0",
+                    mlx_weights_dir=None,   # auto-converts to ~/.cache/anvil-audio/mlx-weights/
                     max_duration=47.0,
                     default_params={
                         "steps": 100,

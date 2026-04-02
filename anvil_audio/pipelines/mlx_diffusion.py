@@ -10,6 +10,23 @@ This module wraps ``StableAudioPipeline`` from mlx-audiogen behind Anvil's
 integrate with the registry, CLI batch generation, ``OutputManager``,
 Gradio UI, and MCP server without any special-casing in those layers.
 
+Weight conversion
+-----------------
+mlx-audiogen requires PyTorch weights to be converted to MLX safetensors
+format before inference.  This adapter handles that automatically:
+
+1. On first use the original HuggingFace weights are downloaded and
+   converted via ``mlx_audiogen.models.stable_audio.convert_stable_audio()``.
+2. Converted weights are cached at::
+
+       ~/.cache/anvil-audio/mlx-weights/<model-slug>/
+
+3. Subsequent loads skip conversion and load directly from the cache.
+
+If ``weights_dir`` is given and already contains all required files
+(``config.json``, ``vae.safetensors``, ``dit.safetensors``, etc.) it is
+used as-is — no download or conversion occurs.
+
 Audio I/O
 ---------
 mlx-audiogen returns an ``mx.array`` of shape ``(1, channels, samples)`` in
@@ -35,9 +52,9 @@ Usage
 
     from anvil_audio.pipelines.mlx_diffusion import MLXDiffusionPipeline
 
+    # weights are auto-downloaded and converted on first use
     pipe = MLXDiffusionPipeline(
         repo_id="stabilityai/stable-audio-open-small",
-        weights_dir="stable-audio",   # key in mlx-audiogen's MODEL_REGISTRY
     )
     audio = pipe.generate(
         [{"prompt": "soft rain on leaves", "seconds_total": 10}]
@@ -49,6 +66,7 @@ from __future__ import annotations
 
 import platform
 import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -57,6 +75,89 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from anvil_audio.core.interfaces import BasePipeline
+
+# Files that must exist in a converted weights directory.
+_REQUIRED_FILES = (
+    "config.json",
+    "vae.safetensors",
+    "dit.safetensors",
+    "t5.safetensors",
+    "conditioners.safetensors",
+)
+
+# Anvil's local cache for auto-converted MLX weights.
+_MLX_CACHE_ROOT = Path.home() / ".cache" / "anvil-audio" / "mlx-weights"
+
+
+def _resolve_or_convert(repo_id: str, weights_dir: str | None) -> Path:
+    """Return a path to a complete converted-weights directory.
+
+    Resolution order
+    ----------------
+    1. If *weights_dir* is given and contains all required files → use it.
+    2. Check the Anvil MLX cache (``~/.cache/anvil-audio/mlx-weights/<slug>``).
+       If all files are present → use the cache.
+    3. Download the original HuggingFace weights and convert them into the
+       cache directory via ``convert_stable_audio()``.
+
+    Args:
+        repo_id:     HuggingFace repo ID (e.g. ``"stabilityai/stable-audio-open-small"``).
+        weights_dir: Explicit path to pre-converted weights, or ``None`` to
+                     use the auto-convert cache.
+
+    Returns:
+        ``Path`` to a directory that contains all required safetensors files.
+
+    Raises:
+        ImportError:  If ``mlx_audiogen`` is not installed.
+        RuntimeError: If conversion fails.
+    """
+    # 1. Explicit pre-converted path.
+    if weights_dir is not None:
+        p = Path(weights_dir).expanduser().resolve()
+        if p.is_dir() and all((p / f).exists() for f in _REQUIRED_FILES):
+            return p
+        # Path given but incomplete — warn and fall through to auto-convert.
+        print(
+            f"[mlx] weights_dir={weights_dir!r} is missing required files; "
+            "falling back to auto-convert cache."
+        )
+
+    # 2. Check Anvil's local cache.
+    slug = repo_id.split("/")[-1]   # "stable-audio-open-small"
+    cache_path = _MLX_CACHE_ROOT / slug
+    if cache_path.is_dir() and all((cache_path / f).exists() for f in _REQUIRED_FILES):
+        print(f"[mlx] Using cached weights at {cache_path}")
+        return cache_path
+
+    # 3. Auto-convert: download from HF and convert to MLX safetensors.
+    try:
+        from mlx_audiogen.models.stable_audio.convert import convert_stable_audio
+    except ImportError as exc:
+        raise ImportError(
+            "mlx-audiogen is required for weight conversion.  Install it with:\n\n"
+            "    pip install mlx-audiogen\n\n"
+            f"Underlying error: {exc}"
+        ) from exc
+
+    print(
+        f"[mlx] First-run weight conversion for {repo_id}\n"
+        f"[mlx] Downloading from HuggingFace and converting to MLX format...\n"
+        f"[mlx] This takes a few minutes and ~2 GB of disk space.\n"
+        f"[mlx] Output: {cache_path}"
+    )
+    try:
+        convert_stable_audio(repo_id=repo_id, output_dir=str(cache_path))
+    except Exception as exc:
+        raise RuntimeError(
+            f"MLX weight conversion failed for {repo_id!r}.\n"
+            f"  Cache path: {cache_path}\n"
+            f"  Error: {exc}\n\n"
+            "You can also convert manually with:\n"
+            f"    mlx-audiogen-convert --model {repo_id} --output {cache_path}"
+        ) from exc
+
+    return cache_path
 
 
 def is_mlx_available() -> bool:
@@ -88,13 +189,15 @@ class MLXDiffusionPipeline(BasePipeline):
     MCP server.
 
     Args:
-        repo_id:       HuggingFace repo ID used to download the T5 tokenizer
+        repo_id:       HuggingFace repo ID for the Stability AI model
                        (e.g. ``"stabilityai/stable-audio-open-small"``).
-        weights_dir:   Path to a directory containing converted ``.safetensors``
-                       files **or** a short key from mlx-audiogen's built-in
-                       model registry (e.g. ``"stable-audio"`` for the small
-                       variant, ``"stable-audio-1.0"`` for the full model).
-                       ``None`` lets mlx-audiogen resolve the default model.
+                       Used both as the conversion source and for tokenizer
+                       download.
+        weights_dir:   Path to a directory that already contains converted
+                       MLX ``.safetensors`` files.  ``None`` (the default)
+                       triggers auto-convert: weights are downloaded from
+                       *repo_id* and cached at
+                       ``~/.cache/anvil-audio/mlx-weights/<model-slug>/``.
         default_params: Generation parameter overrides applied when callers
                         omit individual kwargs.  Recognised keys:
                         ``steps``, ``cfg_scale``, ``sampler_type``,
@@ -131,12 +234,15 @@ class MLXDiffusionPipeline(BasePipeline):
             "sigma_max": _RF_SIGMA_MAX,
         }
 
+        # Resolve (or trigger first-run auto-conversion of) the weights dir.
+        resolved_weights = _resolve_or_convert(repo_id, weights_dir)
+
         print(
             f"->->-> Loading MLX Stable Audio  "
-            f"repo={repo_id!r}  weights={weights_dir!r}"
+            f"repo={repo_id!r}  weights={resolved_weights}"
         )
         self._pipe: Any = StableAudioPipeline.from_pretrained(
-            weights_dir=weights_dir,
+            weights_dir=str(resolved_weights),
             repo_id=repo_id,
         )
         print("->->-> MLX Stable Audio ready")
