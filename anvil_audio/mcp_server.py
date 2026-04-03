@@ -386,6 +386,7 @@ def edit_audio(
     fade_in: float = 0.0,
     fade_out: float = 0.0,
     # Output
+    fmt: str = "wav",
     project: str = "",
 ) -> dict[str, Any]:
     """Post-process an audio file with a non-destructive effects chain.
@@ -424,6 +425,7 @@ def edit_audio(
         reverb_damping: High-frequency damping, 0.0–1.0.
         fade_in: Fade-in duration in seconds (linear ramp from silence).
         fade_out: Fade-out duration in seconds (linear ramp to silence).
+        fmt: Output format — "wav", "flac", "mp3", or "ogg".
         project: Output project folder. Uses the active project if omitted.
 
     Returns:
@@ -489,11 +491,12 @@ def edit_audio(
                 "source_audio_path": source_p,
                 "source_sidecar_path": source_sidecar,
                 "effects": effects_config,
+                "export_format": fmt,
             },
         )
 
         output_manager = OutputManager(project=_resolve_project(project))
-        path, sidecar = output_manager.save_audio(tensor, meta, out_sr, ext="wav")
+        path, sidecar = output_manager.save_audio(tensor, meta, out_sr, ext=fmt)
 
         return {
             "path": str(path),
