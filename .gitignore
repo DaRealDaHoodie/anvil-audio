@@ -164,6 +164,9 @@ wandb/
 runs/
 tmp/
 
+# Gradio
+.gradio/
+
 # Checkpoints
 *.pt
 *.pth
