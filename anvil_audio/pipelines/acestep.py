@@ -79,6 +79,8 @@ class ACEStepPipeline(BasePipeline):
         project_root:    Absolute path to the ACE-Step repository root (the
                          directory that contains ``checkpoints/``).  Can be
                          a cloned git repo or an installed package directory.
+                         Pass ``None`` (default) when ACE-Step is pip-installed
+                         and importable without path manipulation.
         config_path:     Model variant — ``"acestep-v15-turbo"`` (fast) or
                          ``"acestep-v15-sft"`` (full quality).  Defaults to
                          ``"acestep-v15-turbo"``.
@@ -104,33 +106,35 @@ class ACEStepPipeline(BasePipeline):
 
     def __init__(
         self,
-        project_root: str,
+        project_root: str | None = None,
         config_path: str = "acestep-v15-turbo",
         device: str = "auto",
         offload_to_cpu: bool = False,
         lm_model_path: str | None = None,
         default_params: dict[str, Any] | None = None,
     ) -> None:
-        # Resolve and (if needed) inject the project root so that
-        # `from acestep.handler import ...` works whether ACE-Step is
-        # pip-installed or run directly from its cloned source tree.
-        resolved_root = str(Path(project_root).resolve())
-        if resolved_root not in sys.path:
-            sys.path.insert(0, resolved_root)
+        # Inject project root into sys.path only when explicitly provided.
+        # When None, acestep must be importable already (pip-installed).
+        if project_root is not None:
+            resolved_root = str(Path(project_root).resolve())
+            if resolved_root not in sys.path:
+                sys.path.insert(0, resolved_root)
+        else:
+            resolved_root = None
 
         try:
             from acestep.handler import AceStepHandler  # type: ignore[import]
         except ImportError as exc:
             raise ImportError(
-                "ACE-Step could not be imported.  Either install it via\n\n"
-                "    pip install ace_step\n\n"
-                "or point 'project_root' at the cloned ACE-Step repository "
-                "so that its source tree is importable.\n\n"
+                "ACE-Step could not be imported. Install it with:\n\n"
+                "    pip install anvil-audio[acestep]\n\n"
+                "or run the platform install script:\n\n"
+                "    bash install.sh\n\n"
                 f"Underlying error: {exc}"
             ) from exc
 
         self._handler: Any = AceStepHandler()
-        self._project_root: str = resolved_root
+        self._project_root: str | None = resolved_root
         self._config_path: str = config_path
         self._device_str: str = device
 
