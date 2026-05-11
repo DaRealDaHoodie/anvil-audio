@@ -14,14 +14,15 @@ echo "Platform: $OS / $ARCH"
 echo ""
 
 # ── Python version check ──────────────────────────────────────────────────────
-PY_VER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-if [[ "$PY_VER" < "3.12" ]]; then
-    echo "ERROR: Python 3.12 or 3.13 required (found $PY_VER)."
+PY_MAJOR=$($PYTHON -c "import sys; print(sys.version_info.major)")
+PY_MINOR=$($PYTHON -c "import sys; print(sys.version_info.minor)")
+if [[ "$PY_MAJOR" -lt 3 || ( "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 12 ) ]]; then
+    echo "ERROR: Python 3.12 or 3.13 required (found ${PY_MAJOR}.${PY_MINOR})."
     echo "Install via: brew install python@3.13  (macOS)"
     echo "             sudo apt install python3.13  (Linux)"
     exit 1
 fi
-echo "Python $PY_VER — OK"
+echo "Python ${PY_MAJOR}.${PY_MINOR} — OK"
 
 # ── Virtual environment ───────────────────────────────────────────────────────
 if [ ! -d "$VENV_DIR" ]; then
