@@ -39,30 +39,45 @@ registry, CLI, and Gradio UI.
 
 ## Install
 
-> **Python 3.12 or 3.13 is strongly recommended.** Python 3.14 is too new — several ML
-> dependencies (scipy, k-diffusion) don't have pre-built wheels for it yet and will attempt
-> to compile from source. If you're on Homebrew Python, check your version with
-> `python3 --version` and install 3.12/3.13 via `brew install python@3.13` if needed.
+> **Python 3.12 or 3.13 is required.** Check with `python3 --version`.
+> Install via `brew install python@3.13` (macOS) or from [python.org](https://python.org) (Windows).
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/PiMPStudios/anvil-audio.git
 cd anvil-audio
-
-# Python 3.12+ requires a virtual environment (mandatory on Homebrew / system Python)
-python3.13 -m venv .venv        # use python3.12 if 3.13 isn't available
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-
-pip install .
-# avoid Accelerate import error on some setups
-pip uninstall -y transformer-engine
+bash install.sh
 ```
 
-**If you must use Python 3.14** and hit scipy build errors, install a Fortran compiler first:
+The script detects your platform, creates a virtual environment, installs the right PyTorch build, enables MLX acceleration on Apple Silicon, and optionally installs ACE-Step for music generation — all in one step.
+
+### Windows
+
+```powershell
+git clone https://github.com/PiMPStudios/anvil-audio.git
+cd anvil-audio
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+### Manual install (advanced)
 
 ```bash
-brew install gcc        # provides gfortran, required to compile scipy from source
-pip install .
+python3.13 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+
+pip install .                      # core install
+pip install mlx-audiogen           # Apple Silicon only: MLX acceleration
+pip install 'anvil-audio[acestep]' # optional: ACE-Step music generation
 ```
+
+### Verify your setup
+
+```bash
+anvil setup
+```
+
+This prints your platform, which optional packages are active, and what models are registered.
 
 ---
 
@@ -135,34 +150,6 @@ model that supports style tags and full lyric input. Anvil integrates it through
 registry and UI as Stable Audio — no separate server or app required.
 
 ACE-Step is **optional**. If you don't install it, all other Anvil functionality works as normal.
-
-### Install ACE-Step
-
-```bash
-# Clone the ACE-Step repo (Anvil imports it directly — no pip install needed)
-git clone https://github.com/ace-step/ACE-Step.git /path/to/ACE-Step
-cd /path/to/ACE-Step
-
-# Install ACE-Step's dependencies into your Anvil venv
-pip install -r requirements.txt
-
-# ACE-Step requires transformers 4.x (not 5.x)
-pip install "transformers>=4.51.0,<4.58.0"
-```
-
-The model weights are downloaded automatically from HuggingFace the first time you generate.
-
-**`ACESTEP_PROJECT_ROOT` must be set** for Anvil to find the ACE-Step models. Without it,
-ACE-Step entries will not appear in the registry at all.
-
-```bash
-export ACESTEP_PROJECT_ROOT=/path/to/your/ACE-Step
-
-# Verify it's registered:
-anvil --list-models
-```
-
-Add the export to your shell profile (`.zshrc`, `.bashrc`, etc.) to make it permanent.
 
 ### LM lyric planner
 
@@ -426,19 +413,15 @@ Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`
   "mcpServers": {
     "anvil-audio": {
       "command": "/path/to/anvil-audio/.venv/bin/python",
-      "args": ["-m", "anvil_audio.mcp_server"],
-      "env": {
-        "ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"
-      }
+      "args": ["-m", "anvil_audio.mcp_server"]
     }
   }
 }
 ```
 
-Replace `/path/to/anvil-audio` with the absolute path to your clone. The `env`
-block is required for ACE-Step models — Claude Desktop doesn't inherit your
-shell environment, so the variable must be set explicitly. Omit the `env` block
-if you're only using Stable Audio models.
+> If you installed ACE-Step via the legacy `git clone` method, also add `"ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"` to an `"env"` block.
+
+Replace `/path/to/anvil-audio` with the absolute path to your clone.
 
 ### Claude Code config
 
@@ -450,14 +433,13 @@ Add to `~/.claude.json` under `mcpServers`:
     "anvil-audio": {
       "command": "/path/to/anvil-audio/.venv/bin/python",
       "args": ["-m", "anvil_audio.mcp_server"],
-      "type": "stdio",
-      "env": {
-        "ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"
-      }
+      "type": "stdio"
     }
   }
 }
 ```
+
+> If you installed ACE-Step via the legacy `git clone` method, also add `"ACESTEP_PROJECT_ROOT": "/path/to/ACE-Step"` to an `"env"` block.
 
 ### Example session
 
