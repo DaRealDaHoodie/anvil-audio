@@ -46,10 +46,54 @@ def main() -> None:
     if sub == "generate":
         from anvil_audio._cli_generate import main as gen_main
         gen_main()
+    elif sub == "setup":
+        _cmd_setup(_parse_setup_args())
     else:
         print(f"anvil: unknown subcommand '{sub}'")
         _print_help()
         sys.exit(1)
+
+
+def _parse_setup_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="anvil setup",
+        description="Check environment and optionally pre-download model weights.",
+    )
+    parser.add_argument(
+        "--download",
+        metavar="MODEL",
+        nargs="*",
+        help=(
+            "Model names to pre-download weights for (e.g. stable-audio-open-1.0). "
+            "Omit to just check the environment."
+        ),
+    )
+    return parser.parse_args()
+
+
+def _cmd_setup(args) -> None:
+    from anvil_audio._setup import print_environment_report
+    from anvil_audio.core.registry import registry
+
+    print("=== Anvil Audio Environment ===\n")
+    print_environment_report()
+
+    if args.download is not None:
+        models = args.download or [e.name for e in registry.list_models()]
+        print(f"\nPre-downloading weights for: {', '.join(models)}")
+        for name in models:
+            entry = registry.get_model(name)
+            if entry is None:
+                print(f"  [{name}] not found in registry — skipping")
+                continue
+            try:
+                print(f"  [{name}] loading pipeline to trigger weight download...")
+                registry.load_pipeline(name)
+                print(f"  [{name}] OK")
+            except Exception as exc:
+                print(f"  [{name}] FAILED: {exc}")
 
 
 def _print_help() -> None:
@@ -64,6 +108,7 @@ def _print_help() -> None:
         "\n"
         "Subcommands:\n"
         "  generate    Generate audio from a model and prompt\n"
+        "  setup       Check environment and optionally pre-download model weights\n"
         "\n"
         "Run 'anvil <subcommand> --help' for subcommand options.\n"
     )
