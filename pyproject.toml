@@ -2,5 +2,26 @@
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "anvil-audio"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+mlx = [
+    "mlx-audiogen",
+]
+acestep = [
+    "ace-step @ git+https://github.com/ace-step/ACE-Step.git",
+]
+apple = [
+    "anvil-audio[mlx]",
+    "anvil-audio[acestep]",
+]
+cuda = [
+    "anvil-audio[acestep]",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
