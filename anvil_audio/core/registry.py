@@ -127,6 +127,14 @@ class RegistryEntry:
     lm_model_path: str | None = None
     max_duration: float | None = None
 
+    def __post_init__(self) -> None:
+        if self.pipeline_type == "acestep":
+            # Resolve project_root: explicit value > env var > None (deferred error at load time)
+            if self.acestep_project_root is None:
+                env_root = os.environ.get("ACESTEP_PROJECT_ROOT")
+                if env_root:
+                    object.__setattr__(self, "acestep_project_root", env_root)
+
     def resolved_params(self) -> dict[str, Any]:
         """Return generation params merged over the global defaults."""
         if self.pipeline_type == "acestep":
@@ -152,11 +160,8 @@ class RegistryEntry:
     def validate(self) -> None:
         """Raise ``ValueError`` if the entry is not usable."""
         if self.pipeline_type == "acestep":
-            if self.acestep_project_root is None:
-                raise ValueError(
-                    f"ACE-Step registry entry '{self.name}' must have "
-                    "'acestep_project_root' set to the ACE-Step repo path."
-                )
+            # project_root may be None here; ACEStepPipeline will raise a clear
+            # error at load time if it is still unresolved then.
             return
         if self.pipeline_type == "mlx_diffusion":
             if self.pretrained_name is None:
@@ -235,8 +240,6 @@ class ModelRegistry:
 
     def _load_builtin(self) -> None:
         """Register known Stability AI / HuggingFace models and ACE-Step."""
-        import os
-
         builtin: list[RegistryEntry] = [
             RegistryEntry(
                 name="stable-audio-open-1.0",
@@ -265,47 +268,43 @@ class ModelRegistry:
         ]
 
         # ACE-Step v1.5 built-in entries.
-        # The project root is resolved in priority order:
-        #   1. ACESTEP_PROJECT_ROOT environment variable
-        #   2. The hard-coded local installation path known at authoring time
-        # Entries are only added when the project root directory actually exists
-        # so that the registry stays clean on machines without ACE-Step.
-        _acestep_root = os.environ.get("ACESTEP_PROJECT_ROOT", "")
-        if os.path.isdir(_acestep_root):
-            builtin += [
-                RegistryEntry(
-                    name="acestep-v1.5-turbo",
-                    pipeline_type="acestep",
-                    acestep_project_root=_acestep_root,
-                    model_config_path="acestep-v15-turbo",
-                    lm_model_path="acestep-5Hz-lm-1.7B",
-                    max_duration=600.0,
-                    default_params={
-                        "steps": 50,
-                        "cfg_scale": 4.0,
-                        "audio_duration": 60,
-                        "sampler_type": "ode",
-                        "sigma_min": 0.0,
-                        "sigma_max": 0.0,
-                    },
-                ),
-                RegistryEntry(
-                    name="acestep-v1.5-sft",
-                    pipeline_type="acestep",
-                    acestep_project_root=_acestep_root,
-                    model_config_path="acestep-v15-sft",
-                    lm_model_path="acestep-5Hz-lm-4B",
-                    max_duration=600.0,
-                    default_params={
-                        "steps": 100,
-                        "cfg_scale": 4.0,
-                        "audio_duration": 60,
-                        "sampler_type": "ode",
-                        "sigma_min": 0.0,
-                        "sigma_max": 0.0,
-                    },
-                ),
-            ]
+        # project_root is resolved in __post_init__ from the ACESTEP_PROJECT_ROOT
+        # env var when acestep_project_root is None.  Entries are always registered;
+        # a clear error is raised at pipeline load time if the root is still unset.
+        builtin += [
+            RegistryEntry(
+                name="acestep-v1.5-turbo",
+                pipeline_type="acestep",
+                acestep_project_root=None,
+                model_config_path="acestep-v15-turbo",
+                lm_model_path="acestep-5Hz-lm-1.7B",
+                max_duration=600.0,
+                default_params={
+                    "steps": 50,
+                    "cfg_scale": 4.0,
+                    "audio_duration": 60,
+                    "sampler_type": "ode",
+                    "sigma_min": 0.0,
+                    "sigma_max": 0.0,
+                },
+            ),
+            RegistryEntry(
+                name="acestep-v1.5-sft",
+                pipeline_type="acestep",
+                acestep_project_root=None,
+                model_config_path="acestep-v15-sft",
+                lm_model_path="acestep-5Hz-lm-4B",
+                max_duration=600.0,
+                default_params={
+                    "steps": 100,
+                    "cfg_scale": 4.0,
+                    "audio_duration": 60,
+                    "sampler_type": "ode",
+                    "sigma_min": 0.0,
+                    "sigma_max": 0.0,
+                },
+            ),
+        ]
 
         # MLX-accelerated Stable Audio entries (Apple Silicon only).
         # Added when running on macOS arm64 with mlx-audiogen installed.
