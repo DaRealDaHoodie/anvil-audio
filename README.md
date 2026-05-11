@@ -45,7 +45,7 @@ registry, CLI, and Gradio UI.
 > `python3 --version` and install 3.12/3.13 via `brew install python@3.13` if needed.
 
 ```bash
-git clone https://github.com/DaRealDaHoodie/anvil-audio.git
+git clone https://github.com/PiMPStudios/anvil-audio.git
 cd anvil-audio
 
 # Python 3.12+ requires a virtual environment (mandatory on Homebrew / system Python)

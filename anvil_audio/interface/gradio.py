@@ -342,6 +342,9 @@ def generate_cond(
         preview_every = None
 
     def _preview_callback(callback_info: dict[str, Any]) -> None:
+        from ..pipelines.mlx_diffusion import MLXDiffusionPipeline
+        if isinstance(pipeline, MLXDiffusionPipeline):
+            return
         denoised = callback_info["denoised"]
         current_step = callback_info["i"]
         if (current_step - 1) % preview_every == 0:  # type: ignore[operator]
@@ -356,25 +359,42 @@ def generate_cond(
 
     # Generate via pipeline
     import time as _time
+    from ..pipelines.mlx_diffusion import MLXDiffusionPipeline
     _gen_t0 = _time.perf_counter()
-    audio = generate_diffusion_cond(
-        pipeline._model,
-        conditioning=conditioning,
-        negative_conditioning=negative_conditioning,
-        steps=steps,
-        cfg_scale=cfg_scale,
-        sample_size=input_sample_size,
-        seed=effective_seed,
-        device=pipeline._device,
-        sampler_type=sampler_type,
-        sigma_min=sigma_min,
-        sigma_max=sigma_max,
-        init_audio=init_audio_tensor,
-        init_noise_level=init_noise_level,
-        mask_args=mask_args,
-        callback=_preview_callback if preview_every is not None else None,
-        scale_phi=cfg_rescale,
-    )  # [B, C, T]
+    if isinstance(pipeline, MLXDiffusionPipeline):
+        mlx_conditioning = []
+        for i, cond in enumerate(conditioning):
+            merged = dict(cond)
+            if negative_conditioning is not None and i < len(negative_conditioning):
+                merged["negative_prompt"] = negative_conditioning[i].get("prompt", "")
+            mlx_conditioning.append(merged)
+        audio = pipeline.generate(
+            conditioning=mlx_conditioning,
+            steps=steps,
+            seed=effective_seed,
+            cfg_scale=cfg_scale,
+            sampler_type=sampler_type,
+            sigma_max=sigma_max,
+        )  # [B, C, T]
+    else:
+        audio = generate_diffusion_cond(
+            pipeline._model,
+            conditioning=conditioning,
+            negative_conditioning=negative_conditioning,
+            steps=steps,
+            cfg_scale=cfg_scale,
+            sample_size=input_sample_size,
+            seed=effective_seed,
+            device=pipeline._device,
+            sampler_type=sampler_type,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            init_audio=init_audio_tensor,
+            init_noise_level=init_noise_level,
+            mask_args=mask_args,
+            callback=_preview_callback if preview_every is not None else None,
+            scale_phi=cfg_rescale,
+        )  # [B, C, T]
     _gen_duration = round(_time.perf_counter() - _gen_t0, 3)
 
     # Take first item; clip to seconds_total
@@ -458,20 +478,25 @@ def generate_uncond(
              f"Step {callback_info['i']} sigma={callback_info['sigma']:.3f}")
         )
 
-    audio = generate_diffusion_uncond(
-        pipeline._model,
-        steps=steps,
-        batch_size=batch_size,
-        sample_size=input_sample_size,
-        seed=effective_seed,
-        device=pipeline._device,
-        sampler_type=sampler_type,
-        sigma_min=sigma_min,
-        sigma_max=sigma_max,
-        init_audio=init_audio_tensor,
-        init_noise_level=init_noise_level,
-        callback=_preview_callback if preview_every is not None else None,
-    )
+    from ..pipelines.mlx_diffusion import MLXDiffusionPipeline
+    if isinstance(pipeline, MLXDiffusionPipeline):
+        uncond_cond = [{"prompt": "", "seconds_total": float(sample_size / sample_rate)}] * batch_size
+        audio = pipeline.generate(conditioning=uncond_cond, steps=steps, seed=effective_seed)
+    else:
+        audio = generate_diffusion_uncond(
+            pipeline._model,
+            steps=steps,
+            batch_size=batch_size,
+            sample_size=input_sample_size,
+            seed=effective_seed,
+            device=pipeline._device,
+            sampler_type=sampler_type,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            init_audio=init_audio_tensor,
+            init_noise_level=init_noise_level,
+            callback=_preview_callback if preview_every is not None else None,
+        )
 
     audio_out = rearrange(audio, "b d n -> d (b n)")
     audio_int16 = (
@@ -937,12 +962,13 @@ def _model_load_ui_unified(
     else:
         # sample_size / sample_rate are updated by load_model() called inside _model_load_ui
         max_dur = sample_size / sample_rate if sample_rate else 240.0
+    default_dur = min(p.get("seconds_total", max_dur), max_dur)
     return (
         status,
         gr.update(visible=False),  # lyrics_row
         gr.update(visible=True),   # neg_prompt_row
         gr.update(visible=True),   # diffusion_controls
-        gr.update(maximum=max_dur),
+        gr.update(maximum=max_dur, value=default_dur),
         gr.update(value=int(p.get("steps", 100))),
         gr.update(value=float(p.get("cfg_scale", 7.0))),
         gr.update(value=p.get("sampler_type", "dpmpp-3m-sde")),
