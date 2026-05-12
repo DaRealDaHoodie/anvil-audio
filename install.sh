@@ -16,8 +16,9 @@ echo ""
 # ── Python version check ──────────────────────────────────────────────────────
 PY_MAJOR=$($PYTHON -c "import sys; print(sys.version_info.major)")
 PY_MINOR=$($PYTHON -c "import sys; print(sys.version_info.minor)")
-if [[ "$PY_MAJOR" -lt 3 || ( "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 12 ) ]]; then
+if [[ "$PY_MAJOR" -lt 3 || ( "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 12 ) || ( "$PY_MAJOR" -eq 3 && "$PY_MINOR" -gt 13 ) ]]; then
     echo "ERROR: Python 3.12 or 3.13 required (found ${PY_MAJOR}.${PY_MINOR})."
+    echo "Python 3.14+ is too new for several ML dependencies."
     echo "Install via: brew install python@3.13  (macOS)"
     echo "             sudo apt install python3.13  (Linux)"
     exit 1
