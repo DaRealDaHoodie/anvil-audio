@@ -45,7 +45,7 @@ registry, CLI, and Gradio UI.
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/PiMPStudios/anvil-audio.git
+git clone -b worktree-feature+self-contained-install https://github.com/PiMPStudios/anvil-audio.git
 cd anvil-audio
 bash install.sh
 ```
@@ -55,7 +55,7 @@ The script detects your platform, creates a virtual environment, installs the ri
 ### Windows
 
 ```powershell
-git clone https://github.com/PiMPStudios/anvil-audio.git
+git clone -b worktree-feature+self-contained-install https://github.com/PiMPStudios/anvil-audio.git
 cd anvil-audio
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
