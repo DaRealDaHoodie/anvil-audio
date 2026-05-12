@@ -62,21 +62,33 @@ if [[ "$OS" == "Darwin" && "$ARCH" == "arm64" ]]; then
 fi
 
 # ── ACE-Step (optional music generation) ─────────────────────────────────────
-read -r -p "Install ACE-Step for music generation? [y/N] " INSTALL_AS
-if [[ "$INSTALL_AS" =~ ^[Yy]$ ]]; then
+if [[ "$PY_MINOR" -ge 13 ]]; then
+    echo "NOTE: ACE-Step requires Python 3.12 (spacy 3.8.x does not support 3.13+)."
+    echo "      Skipping ACE-Step prompt. Re-run with PYTHON=python3.12 to enable it."
+else
+    read -r -p "Install ACE-Step for music generation? [y/N] " INSTALL_AS
+    if [[ "$INSTALL_AS" =~ ^[Yy]$ ]]; then
 
-    if [[ "$OS" == "Linux" ]]; then
-        echo "Installing nano-vllm (required on Linux)..."
+        if [[ "$OS" == "Linux" ]]; then
+            echo "Installing nano-vllm (required on Linux)..."
+            $PIP install \
+                "git+https://github.com/ace-step/ACE-Step.git#subdirectory=acestep/third_parts/nano-vllm" \
+                --quiet
+            if [[ $? -ne 0 ]]; then
+                echo "WARNING: nano-vllm install failed — ACE-Step may not work correctly."
+            fi
+        fi
+
+        echo "Installing ACE-Step..."
         $PIP install \
-            "git+https://github.com/ace-step/ACE-Step.git#subdirectory=acestep/third_parts/nano-vllm" \
+            "ace-step @ git+https://github.com/ace-step/ACE-Step.git" \
             --quiet
+        if [[ $? -eq 0 ]]; then
+            echo "ACE-Step installed."
+        else
+            echo "WARNING: ACE-Step install failed. Check errors above."
+        fi
     fi
-
-    echo "Installing ACE-Step..."
-    $PIP install \
-        "ace-step @ git+https://github.com/ace-step/ACE-Step.git" \
-        --quiet
-    echo "ACE-Step installed."
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
