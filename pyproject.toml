@@ -8,6 +8,9 @@ version = "1.0.0"
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+anvil = "anvil_audio.cli:main"
+
 [project.optional-dependencies]
 mlx = [
     "mlx-audiogen",
