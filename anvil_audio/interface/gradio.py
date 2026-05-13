@@ -29,7 +29,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torchaudio
 from einops import rearrange
 from torchaudio import transforms as T
 
@@ -37,7 +36,6 @@ from ..core.output import GenerationMetadata, OutputManager
 from ..core.pipeline import DiffusionPipeline
 from ..core.registry import registry
 from ..inference.generation import generate_diffusion_cond, generate_diffusion_uncond
-from ..models.factory import create_pipeline_from_config
 from ..models.pretrained import get_pretrained_model
 from ..models.utils import load_ckpt_state_dict
 from ..training.viz import audio_spectrogram_image
@@ -173,6 +171,7 @@ def load_acestep_model(
         project_root=entry.acestep_project_root,
         config_path=entry.model_config_path or "acestep-v15-turbo",
         device=acestep_device,
+        lm_model_path=entry.lm_model_path,
         default_params=entry.resolved_params(),
     )
     _model_name = entry.name
@@ -294,7 +293,7 @@ def generate_cond(
     empty_cache()
     gc.collect()
 
-    print(f"=== Conditional generation ===")
+    print("=== Conditional generation ===")
     print(f"\tPrompt: {prompt}")
     print(f"\tStart (sec): {seconds_start}  |  Length (sec): {seconds_total}")
     print(f"\tCFG scale: {cfg_scale}  |  Steps: {steps}  |  Seed: {seed}")
@@ -1232,7 +1231,7 @@ def create_acestep_ui(project_component: Any, default_params: dict | None = None
 
 def create_txt2audio_ui(model_config: dict[str, Any], project_component: Any) -> Any:
     import gradio as gr
-    with gr.Blocks() as ui:
+    with gr.Blocks():
         with gr.Tab("Generation"):
             gen_params = create_sampling_ui(model_config, project_component)
         with gr.Tab("Inpainting"):

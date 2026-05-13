@@ -42,7 +42,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .interfaces import BasePipeline
-    from .pipeline import DiffusionPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +296,22 @@ class ModelRegistry:
                     lm_model_path="acestep-5Hz-lm-4B",
                     max_duration=600.0,
                     default_params={
-                        "steps": 100,
-                        "cfg_scale": 4.0,
+                        "steps": 50,
+                        "cfg_scale": 7.5,
                         "audio_duration": 60,
                         "sampler_type": "ode",
+                        "shift": 3.0,
+                        "use_adg": False,
+                        "cfg_interval_start": 0.0,
+                        "cfg_interval_end": 1.0,
+                        "lm_cfg_scale": 2.0,
+                        "thinking": False,
+                        "use_cot_metas": False,
+                        "use_cot_caption": False,
+                        "use_cot_language": False,
+                        "dcw_enabled": False,
+                        "velocity_norm_threshold": 0.0,
+                        "velocity_ema_factor": 0.0,
                         "sigma_min": 0.0,
                         "sigma_max": 0.0,
                     },
