@@ -1,5 +1,14 @@
 # Anvil Audio
 
+> [!IMPORTANT]
+> **Anvil Audio v1 is no longer actively supported.**
+> This repository remains online for reference, but new installs and ongoing
+> work should use **Anvil Audio v2**:
+> <https://github.com/PiMPStudios/anvil-audio-v2>.
+> V2 is the current, improved version of the project with the updated ACE-Step
+> integration, SFT/XL model fixes, optional checkpoint installs, prompt and
+> lyric tools, dataset/LoRA workflow, and current documentation.
+
 > **A pluggable studio tool for AI audio generation. Swap models, keep your workflow.**
 
 Anvil Audio is a refactored and extended fork of
